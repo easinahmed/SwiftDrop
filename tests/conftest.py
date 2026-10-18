@@ -93,6 +93,15 @@ def _make_handler(server: TestServer):
         def do_HEAD(self) -> None:
             self.do_GET()
 
+        def _connection_number(self, key: str) -> int:
+            # One handler instance serves one TCP connection (keep-alive included), so this numbers
+            # the connections per key in the order they first ask for it. `slowconn` calls it only for
+            # data requests (not the 1-byte `Range: bytes=0-0` probe), so it throttles real transfers.
+            numbers: dict[str, int] = self.__dict__.setdefault("_conn_numbers", {})
+            if key not in numbers:
+                numbers[key] = server.hit("conn:" + key)
+            return numbers[key]
+
         def do_GET(self) -> None:
             with server.lock:
                 server.active += 1
@@ -151,21 +160,45 @@ def _make_handler(server: TestServer):
             self._send_status(404)
 
         def _serve_bytes(self, data: bytes, ctype: str, query: dict[str, str], key: str) -> None:
+            """Serve ``data`` honouring Range/If-Range; query params simulate misbehaving servers.
+
+            flaky=N[&flaky_skip=K&flaky_status=CODE&retry_after=S], fail_once=CODE, norange=1,
+            drop_after=B[&drop_times=N], fail_after_bytes=N[&fail_code=C] (cut once, then answer C once),
+            rate=B (bytes/s), slowconn=K&slowrate=B (first K data connections throttled),
+            range_after=N (only the first N ranged requests get a 206), etag_after=N (ETag changes after N requests).
+            """
             flaky = int(query.get("flaky", "0"))
             if flaky:
                 count = server.hit("flaky:" + key)
-                if count <= flaky:
+                skip = int(query.get("flaky_skip", "0"))  # let the first requests (the probe) through
+                if skip < count <= skip + flaky:
                     extra = {"Content-Type": "text/plain"}
                     if "retry_after" in query:
                         extra["Retry-After"] = query["retry_after"]
                     self._send_status(int(query.get("flaky_status", "503")), extra, b"busy")
                     return
+            if "fail_once" in query and server.hit("fail_once:" + key) == 1:
+                self._send_status(int(query["fail_once"]), {"Content-Type": "text/plain"}, b"failed once")
+                return
+            fail_after = int(query.get("fail_after_bytes", "0"))
+            fail_count = 0
+            if fail_after and self.headers.get("Range") != "bytes=0-0":
+                fail_count = server.hit("fail_after:" + key)  # 1st data request is cut; the 2nd gets fail_code
+                if fail_count == 2:
+                    self._send_status(int(query.get("fail_code", "403")), {"Content-Type": "text/plain"}, b"expired")
+                    return
             norange = query.get("norange") == "1"
             etag = '"' + hashlib.md5(data).hexdigest() + '"'
+            etag_after = int(query.get("etag_after", "0"))
+            if etag_after and server.hit("etag:" + key) > etag_after:
+                etag = etag[:-1] + '-changed"'  # the representation "changed" on the server
             start, end = 0, len(data) - 1
             status = 200
             range_header = self.headers.get("Range")
             if_range = self.headers.get("If-Range")
+            range_after = int(query.get("range_after", "0"))
+            if range_header and range_after and server.hit("range:" + key) > range_after:
+                norange = True  # honoured the first N ranged requests; now answer with the full body
             if range_header and not norange and (not if_range or if_range == etag):
                 match = re.match(r"bytes=(\d+)-(\d*)", range_header)
                 if match:
@@ -193,7 +226,12 @@ def _make_handler(server: TestServer):
             drop_after = int(query.get("drop_after", "0"))
             drop_times = int(query.get("drop_times", "1"))
             should_drop = drop_after and server.hit("drop:" + key) <= drop_times
+            if fail_after and fail_count == 1:  # fail_after_bytes: cut the first data response short
+                drop_after, should_drop = fail_after, True
             rate = int(query.get("rate", "0"))
+            slowconn = int(query.get("slowconn", "0"))
+            if slowconn and range_header != "bytes=0-0" and self._connection_number(key) <= slowconn:
+                rate = int(query["slowrate"])
             chunk = 16 * 1024
             sent = 0
             for offset in range(0, len(body), chunk):
@@ -206,7 +244,7 @@ def _make_handler(server: TestServer):
                     return
                 self.wfile.write(piece)
                 sent += len(piece)
-                if rate:
+                if rate and offset + chunk < len(body):  # no pause after the last piece: it'd inflate `active`
                     time.sleep(len(piece) / rate)
 
     return Handler
@@ -263,3 +301,37 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if "network" in item.keywords:
             item.add_marker(skip)
+
+
+def _swiftc_command() -> list[str] | None:
+    """Apple's swiftc through xcrun (which supplies the SDK); a swiftc first on PATH (e.g. swiftly) may not
+    build against the macOS SDK, so it is only the fallback."""
+    import shutil
+
+    if shutil.which("xcrun"):
+        return ["xcrun", "swiftc"]
+    found = shutil.which("swiftc")
+    return [found] if found else None
+
+
+@pytest.fixture(scope="session")
+def check_playable(tmp_path_factory):
+    """scripts/check_playable.swift compiled once: asks AVFoundation (QuickTime) if files play."""
+    import subprocess
+    import sys
+
+    if sys.platform != "darwin":
+        pytest.skip("AVFoundation is macOS only")
+    swiftc = _swiftc_command()
+    if not swiftc:
+        pytest.skip("swiftc not available")
+    source = Path(__file__).resolve().parent.parent / "scripts" / "check_playable.swift"
+    binary = tmp_path_factory.mktemp("swift") / "check_playable"
+    built = subprocess.run([*swiftc, "-O", "-o", str(binary), str(source)], capture_output=True, text=True, timeout=600)
+    if built.returncode != 0:
+        pytest.skip("swiftc could not build check_playable: " + built.stderr.strip()[-300:])
+
+    def run(path: Path) -> str:
+        return subprocess.run([str(binary), str(path)], capture_output=True, text=True, timeout=60).stdout
+
+    return run

@@ -58,6 +58,26 @@ def test_choose_filename_adds_extension_from_mime():
     assert choose_filename(url="https://example.com/clip.mov", content_type="video/quicktime") == "clip.mov"
 
 
+@pytest.mark.parametrize(
+    ("name", "ctype", "expected"),
+    [
+        ("watch.php", "video/mp4", "watch.mp4"),
+        ("get.cgi", "audio/mpeg", "get.mp3"),
+        ("stream.aspx", "image/jpeg", "stream.jpg"),
+        ("report.pdf", "application/octet-stream", "report.pdf"),
+        ("archive.tar.gz", "application/gzip", "archive.tar.gz"),
+        ("clip.mp4", "video/quicktime", "clip.mp4"),
+    ],
+)
+def test_choose_filename_media_mime_replaces_unknown_extension(name, ctype, expected):
+    assert choose_filename(url=f"https://example.com/{name}", content_type=ctype) == expected
+
+
+def test_choose_filename_keeps_stream_manifest_extension():
+    url = "https://example.com/play.m3u8"
+    assert choose_filename(url=url, content_type="application/vnd.apple.mpegurl") == "play.m3u8"
+
+
 def test_kind_for_extension():
     assert kind_for_extension("MP4") == MediaKind.VIDEO
     assert kind_for_extension("flac") == MediaKind.AUDIO

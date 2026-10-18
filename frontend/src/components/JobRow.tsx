@@ -8,7 +8,7 @@ import {
   Square,
   Trash2,
 } from "lucide-react";
-import { formatBytes, formatEta, formatRelative, formatSpeed } from "../lib/format";
+import { formatBytes, formatConnections, formatEta, formatRelative, formatSpeed } from "../lib/format";
 import type { Job } from "../lib/types";
 import { ErrorNote, StateBadge, Thumb } from "./media";
 import { Checkbox, cx, IconButton, ProgressBar } from "./ui";
@@ -30,6 +30,8 @@ function progressLine(job: Job): string {
     if (job.state === "downloading") {
       const speed = formatSpeed(job.speed);
       if (speed) parts.push(speed);
+      const connections = formatConnections(job.connections);
+      if (connections) parts.push(connections);
       const eta = formatEta(job.eta);
       if (eta) parts.push(job.total_is_estimate ? `~${eta}` : eta);
       if (job.phase && job.downloaded_bytes && job.phase !== "Downloading") parts.push(job.phase);

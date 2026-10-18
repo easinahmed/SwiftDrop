@@ -5,8 +5,9 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from swiftdrop.cancel import CancelToken
-from swiftdrop.engine.http import HttpDownloader
+from swiftdrop.engine.http import HttpDownloader, HttpResult
 from swiftdrop.engine.progress import ProgressUpdate
+from swiftdrop.engine.segmented import SegmentedDownloader, SegmentedUnavailable
 from swiftdrop.errors import failure
 from swiftdrop.filenames import (
     DEFAULT_STEM,
@@ -40,8 +41,13 @@ def _kind(name: str, content_type: str | None) -> MediaKind:
 class DirectProvider:
     name = "direct"
 
-    def __init__(self, downloader_factory: Callable[[], HttpDownloader]) -> None:
+    def __init__(
+        self,
+        downloader_factory: Callable[[], HttpDownloader],
+        segmented_factory: Callable[[int], SegmentedDownloader] | None = None,
+    ) -> None:
         self._factory = downloader_factory
+        self._segmented_factory = segmented_factory
 
     def inspect(self, url: str, token: CancelToken, settings: Settings) -> InspectResult:
         probe = self._factory().probe(url, token)
@@ -80,7 +86,17 @@ class DirectProvider:
             ctx.report(update)
 
         ctx.report(ProgressUpdate(phase="Connecting"))
-        result = self._factory().download(ctx.url, part, ctx.token, on_progress, state)
+        result: HttpResult | None = None
+        # A partial file from a single-connection run is continued the same way, not restarted.
+        single_partial = part.exists() and part.stat().st_size > 0 and not state.get("segments")
+        if self._segmented_factory is not None and not single_partial:
+            segmented = self._segmented_factory(ctx.settings.connections_per_download)
+            try:
+                result = segmented.download(ctx.url, part, ctx.token, on_progress, state)
+            except SegmentedUnavailable:
+                result = None  # small file or no usable ranges: one connection, from zero
+        if result is None:
+            result = self._factory().download(ctx.url, part, ctx.token, on_progress, state)
         ctx.checkpoint()
         name = _pick_name(ctx.url, result.final_url, result.content_disposition, result.content_type)
         kind = _kind(name, result.content_type)

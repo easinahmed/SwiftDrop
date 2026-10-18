@@ -38,6 +38,7 @@ class NullPlatform:
         self.revealed: list[Path] = []
         self.opened: list[Path] = []
         self.clipboard: str | None = None
+        self.login_item_calls: list[bool] = []
         self.monitor_callback: Callable[[str], None] | None = None
 
     def reveal(self, path: Path) -> bool:
@@ -59,6 +60,7 @@ class NullPlatform:
         self.notifications.append((title, body))
 
     def set_login_item(self, enabled: bool) -> None:
+        self.login_item_calls.append(enabled)
         raise RuntimeError("Open at login is only available in the installed app.")
 
     def login_item_supported(self) -> bool:

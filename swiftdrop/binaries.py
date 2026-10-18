@@ -22,6 +22,10 @@ from swiftdrop.paths import is_frozen, resource_root
 _SYSTEM_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin", "/usr/bin")
 
 
+# Frozen builds trust only these locations for the JavaScript runtime.
+_FROZEN_JS_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin")
+
+
 def machine_arch() -> str:
     machine = platform.machine().lower()
     return "arm64" if machine in ("arm64", "aarch64") else "x86_64"
@@ -38,8 +42,15 @@ def _is_exe(path: Path) -> bool:
     return path.is_file() and os.access(path, os.X_OK)
 
 
-def _find(name: str, env_var: str, extra_dirs: tuple[str, ...] = ()) -> Path | None:
-    override = os.environ.get(env_var)
+def _find(
+    name: str,
+    env_var: str,
+    extra_dirs: tuple[str, ...] = (),
+    system_dirs: tuple[str, ...] = _SYSTEM_DIRS,
+    use_path: bool = True,
+) -> Path | None:
+    frozen = is_frozen()
+    override = None if frozen else os.environ.get(env_var)
     if override:
         candidate = Path(override).expanduser()
         return candidate if _is_exe(candidate) else None
@@ -47,10 +58,12 @@ def _find(name: str, env_var: str, extra_dirs: tuple[str, ...] = ()) -> Path | N
         candidate = directory / name
         if _is_exe(candidate):
             return candidate
-    for extra in (*extra_dirs, *_SYSTEM_DIRS):
+    for extra in (*(() if frozen else extra_dirs), *system_dirs):
         candidate = Path(extra).expanduser() / name
         if _is_exe(candidate):
             return candidate
+    if not use_path:
+        return None
     found = shutil.which(name)
     return Path(found) if found else None
 
@@ -114,12 +127,16 @@ def _parse_version(text: str) -> tuple[int, ...]:
 def find_js_runtime() -> JsRuntime | None:
     """Best supported JavaScript runtime for yt-dlp's YouTube challenge solver."""
     home = Path.home()
+    frozen = is_frozen()
     for name, extra in (
         ("deno", (str(home / ".deno" / "bin"),)),
         ("node", (str(home / ".volta" / "bin"),)),
         ("bun", (str(home / ".bun" / "bin"),)),
     ):
-        path = _find(name, f"SWIFTDROP_{name.upper()}", extra)
+        if frozen:
+            path = _find(name, f"SWIFTDROP_{name.upper()}", system_dirs=_FROZEN_JS_DIRS, use_path=False)
+        else:
+            path = _find(name, f"SWIFTDROP_{name.upper()}", extra)
         if path is None:
             continue
         line = tool_version(str(path), ("--version",)) or ""

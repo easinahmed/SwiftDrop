@@ -28,9 +28,10 @@ from pathlib import Path
 from typing import Any
 
 from swiftdrop.logging_setup import get_logger
-from swiftdrop.paths import default_download_dir
+from swiftdrop.paths import default_download_dir, web_root
 from swiftdrop.service import AppService, ServiceError
 from swiftdrop.settings import SettingsError
+from swiftdrop.ui.navlock import normalize_url
 
 log = get_logger("bridge")
 
@@ -100,23 +101,33 @@ def _resolve(path: str) -> str:
         return path
 
 
-def endpoint(fn: Callable[..., Any]) -> Callable[..., Any]:
-    """Wrap a bridge function: uniform envelope, no tracebacks leak to the UI."""
+def bundled_index_url() -> str:
+    return (web_root() / "index.html").as_uri()
 
-    @functools.wraps(fn)
-    def wrapper(*args: Any) -> dict[str, Any]:
-        try:
-            return {"ok": True, "data": fn(*args)}
-        except (BridgeError, ServiceError, SettingsError) as exc:
-            return {"ok": False, "error": str(exc)}
-        except TypeError as exc:
-            log.warning("Bad bridge call to %s: %s", fn.__name__, exc)
-            return {"ok": False, "error": "Invalid request."}
-        except Exception:
-            log.exception("Bridge call %s failed", fn.__name__)
-            return {"ok": False, "error": "Something went wrong. Details were written to the log."}
 
-    return wrapper
+def endpoint(allowed: Callable[[], bool]) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """Wrap a bridge function: refuse foreign pages, uniform envelope, no tracebacks leak."""
+
+    def decorate(fn: Callable[..., Any]) -> Callable[..., Any]:
+        @functools.wraps(fn)
+        def wrapper(*args: Any) -> dict[str, Any]:
+            if not allowed():
+                log.warning("Refused bridge call to %s from a non-bundled page", fn.__name__)
+                return {"ok": False, "error": "Not allowed."}
+            try:
+                return {"ok": True, "data": fn(*args)}
+            except (BridgeError, ServiceError, SettingsError) as exc:
+                return {"ok": False, "error": str(exc), **getattr(exc, "extra", {})}
+            except TypeError as exc:
+                log.warning("Bad bridge call to %s: %s", fn.__name__, exc)
+                return {"ok": False, "error": "Invalid request."}
+            except Exception:
+                log.exception("Bridge call %s failed", fn.__name__)
+                return {"ok": False, "error": "Something went wrong. Details were written to the log."}
+
+        return wrapper
+
+    return decorate
 
 
 class Bridge:
@@ -142,7 +153,18 @@ class Bridge:
     # -- window plumbing --------------------------------------------------
     def attach(self, window: Any) -> None:
         self._window = window
-        window.expose(*self.functions())
+        window.expose(*self.functions(window))
+
+    @staticmethod
+    def window_allowed(window: Any) -> bool:
+        """True only while ``window`` is showing the bundled index.html."""
+        try:
+            current = window.get_current_url()
+        except Exception:
+            return False
+        if not current:
+            return False
+        return normalize_url(current) == normalize_url(bundled_index_url())
 
     def start_publisher(self) -> None:
         self._publisher = threading.Thread(target=self._publish_loop, name="ui-publisher", daemon=True)
@@ -165,6 +187,8 @@ class Bridge:
             payload = self.build_push()
             if payload is None:
                 continue
+            if not self.window_allowed(window):
+                continue  # never push app state into a foreign page
             last = time.monotonic()
             script = f"window.__SD_PUSH__ && window.__SD_PUSH__({json.dumps(payload, ensure_ascii=True)})"
             try:
@@ -213,41 +237,42 @@ class Bridge:
         return self._window.create_file_dialog(dialog_type, **kwargs)
 
     # -- exposed functions --------------------------------------------------
-    def functions(self) -> list[Callable[..., Any]]:
+    def functions(self, window: Any) -> list[Callable[..., Any]]:
         service = self._service
         bridge = self
+        endpoint_ = endpoint(lambda: bridge.window_allowed(window))
 
-        @endpoint
+        @endpoint_
         def get_bootstrap() -> dict[str, Any]:
             return service.bootstrap()
 
-        @endpoint
+        @endpoint_
         def get_state() -> dict[str, Any]:
             state = service.bootstrap()
             state.pop("app", None)
             return state
 
-        @endpoint
+        @endpoint_
         def analyze_text(text: Any, append: Any) -> dict[str, Any]:
             return service.analyze_text(_str(text, "Text", MAX_TEXT_CHARS), _bool(append, "append"))
 
-        @endpoint
+        @endpoint_
         def inspect_preview(ids: Any) -> int:
             return service.preview.inspect(_ids(ids))
 
-        @endpoint
+        @endpoint_
         def remove_preview(ids: Any) -> int:
             return service.preview.remove(_ids(ids))
 
-        @endpoint
+        @endpoint_
         def clear_preview() -> int:
             return service.preview.clear()
 
-        @endpoint
+        @endpoint_
         def get_playlist_entries(item_id: Any) -> list[dict[str, Any]]:
             return service.preview.entries(_id(item_id))
 
-        @endpoint
+        @endpoint_
         def start_downloads(request: Any) -> dict[str, Any]:
             request = _dict(request, "Request")
             raw_items = request.get("items")
@@ -270,13 +295,13 @@ class Bridge:
                 destination = bridge.check_dir(_str(destination, "Destination", 4096))
             return service.start_downloads(items, options, destination)
 
-        @endpoint
+        @endpoint_
         def job_action(action: Any, ids: Any) -> int:
             return service.job_action(
                 _choice(action, "action", ("pause", "resume", "cancel", "retry", "remove")), _ids(ids)
             )
 
-        @endpoint
+        @endpoint_
         def queue_action(action: Any) -> int:
             return service.queue_action(
                 _choice(
@@ -294,23 +319,35 @@ class Bridge:
                 )
             )
 
-        @endpoint
+        @endpoint_
         def reveal_job(job_id: Any) -> bool:
             return service.reveal(service.job_file(_id(job_id)))
 
-        @endpoint
-        def open_job(job_id: Any) -> bool:
-            return service.open_file(service.job_file(_id(job_id)))
+        def _open_confirmed(path: Path, confirmed: bool) -> bool:
+            try:
+                return service.open_file(path, confirmed=confirmed)
+            except ServiceError as exc:
+                if str(exc) != "confirm_open":
+                    raise
+                error = ServiceError("confirm_open")
+                error.extra = {"name": path.name}  # type: ignore[attr-defined]
+                raise error from None
 
-        @endpoint
+        @endpoint_
+        def open_job(job_id: Any, confirmed: Any = False) -> bool:
+            path = service.job_file(_id(job_id))
+            return _open_confirmed(path, _bool(confirmed, "confirmed"))
+
+        @endpoint_
         def reveal_history(entry_id: Any) -> bool:
             return service.reveal(service.history_file(_int(entry_id, "id", 1, 2**62)))
 
-        @endpoint
-        def open_history(entry_id: Any) -> bool:
-            return service.open_file(service.history_file(_int(entry_id, "id", 1, 2**62)))
+        @endpoint_
+        def open_history(entry_id: Any, confirmed: Any = False) -> bool:
+            path = service.history_file(_int(entry_id, "id", 1, 2**62))
+            return _open_confirmed(path, _bool(confirmed, "confirmed"))
 
-        @endpoint
+        @endpoint_
         def search_history(params: Any) -> dict[str, Any]:
             params = _dict(params, "Search")
             return service.search_history(
@@ -321,28 +358,28 @@ class Bridge:
                 _int(params.get("offset", 0), "offset", 0, 10_000_000),
             )
 
-        @endpoint
+        @endpoint_
         def clear_history() -> int:
             return service.clear_history()
 
-        @endpoint
+        @endpoint_
         def delete_history(ids: Any) -> int:
             if not isinstance(ids, list) or len(ids) > MAX_IDS:
                 raise BridgeError("ids must be a list.")
             return service.delete_history([_int(i, "id", 1, 2**62) for i in ids])
 
-        @endpoint
+        @endpoint_
         def get_settings() -> dict[str, Any]:
             return service.settings.get().to_dict()
 
-        @endpoint
+        @endpoint_
         def update_settings(patch: Any) -> dict[str, Any]:
             patch = _dict(patch, "Settings")
             if "download_dir" in patch:
                 bridge.check_dir(_str(patch["download_dir"], "Destination", 4096))
             return service.update_settings(patch)
 
-        @endpoint
+        @endpoint_
         def choose_folder(initial: Any) -> str | None:
             start = _str(initial or "", "Folder", 4096)
             result = bridge._dialog("folder", directory=start if start and Path(start).is_dir() else "")
@@ -352,7 +389,7 @@ class Bridge:
             bridge.approve_dir(chosen)
             return chosen
 
-        @endpoint
+        @endpoint_
         def import_url_file() -> dict[str, Any] | None:
             result = bridge._dialog(
                 "open", allow_multiple=False, file_types=("Text files (*.txt;*.csv;*.md;*.list)", "All files (*.*)")
@@ -365,15 +402,15 @@ class Bridge:
             text = path.read_text(encoding="utf-8", errors="replace")
             return {"name": path.name, "text": text}
 
-        @endpoint
+        @endpoint_
         def read_clipboard() -> str:
             return service.platform.read_clipboard() or ""
 
-        @endpoint
+        @endpoint_
         def copy_text(text: Any) -> bool:
             return service.platform.write_clipboard(_str(text, "Text", 100_000))
 
-        @endpoint
+        @endpoint_
         def export_data(kind: Any) -> str | None:
             filename, content = service.export_text(_choice(kind, "export", ("results", "failed")))
             settings = service.settings.get()
@@ -384,28 +421,28 @@ class Bridge:
             target.write_text(content, encoding="utf-8")
             return str(target)
 
-        @endpoint
+        @endpoint_
         def storage_info() -> dict[str, Any]:
             return service.storage_info()
 
-        @endpoint
+        @endpoint_
         def clean_temp(include_paused: Any) -> int:
             return service.clean_temp(_bool(include_paused, "include_paused"))
 
-        @endpoint
+        @endpoint_
         def get_diagnostics() -> dict[str, Any]:
             return service.diagnostics()
 
-        @endpoint
+        @endpoint_
         def open_logs_folder() -> bool:
             return service.platform.open_path(service.paths.logs_dir)
 
-        @endpoint
+        @endpoint_
         def open_partial_folder() -> bool:
             service.paths.partial_dir.mkdir(parents=True, exist_ok=True)
             return service.platform.open_path(service.paths.partial_dir)
 
-        @endpoint
+        @endpoint_
         def open_download_folder() -> bool:
             return service.platform.open_path(Path(service.settings.get().download_dir))
 

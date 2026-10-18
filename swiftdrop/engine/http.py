@@ -354,7 +354,9 @@ class HttpDownloader:
                 raise DownloadFailure(classify_http_status(status, f"HTTP {status} for {resp.url}"))
 
             content_type = headers.get("Content-Type")
-            if reject_html and existing == 0 and content_type and "text/html" in content_type.lower():
+            # Checked on every full response, not only fresh ones: an expired link that answers a
+            # resume with an HTML page must never replace the partial file.
+            if reject_html and status != 206 and content_type and "text/html" in content_type.lower():
                 raise failure("not_media", f"Content-Type: {content_type}")
             encoded = (
                 bool(headers.get("Content-Encoding")) and headers.get("Content-Encoding", "").lower() != "identity"

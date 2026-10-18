@@ -30,8 +30,8 @@ const QUALITY_OPTIONS: { value: Quality; label: string }[] = [
   { value: "audio", label: "Audio only" },
 ];
 const VIDEO_FORMATS: { value: VideoFormat; label: string }[] = [
-  { value: "mp4", label: "MP4 (most compatible)" },
-  { value: "mkv", label: "MKV" },
+  { value: "mp4", label: "MP4 (plays in QuickTime)" },
+  { value: "mkv", label: "Original quality (MKV, may need VLC)" },
   { value: "webm", label: "WebM" },
   { value: "auto", label: "Original" },
 ];
@@ -157,6 +157,7 @@ function Composer() {
       </label>
       <textarea
         id="url-input"
+        data-drop-target="links"
         ref={textRef}
         value={text}
         spellCheck={false}
@@ -367,7 +368,7 @@ function OptionsBar({ selectedCount, onStart, starting }: { selectedCount: numbe
             value={options.video_format}
             onChange={(video_format) => setOptions({ video_format })}
             options={VIDEO_FORMATS}
-            className="w-[190px]"
+            className="w-[260px]"
           />
         )}
         <button

@@ -14,7 +14,7 @@ import type {
   DownloadOptions,
 } from "./types";
 
-type Envelope<T> = { ok: true; data: T } | { ok: false; error: string };
+type Envelope<T> = { ok: true; data: T } | { ok: false; error: string; name?: string };
 type Bridge = Record<string, (...args: unknown[]) => Promise<Envelope<unknown>>>;
 
 declare global {
@@ -24,7 +24,12 @@ declare global {
   }
 }
 
-export class ApiError extends Error {}
+export class ApiError extends Error {
+  /** File name the engine wants confirmation for (error "confirm_open"). */
+  fileName?: string;
+}
+
+export const CONFIRM_OPEN = "confirm_open";
 
 let bridgePromise: Promise<Bridge> | null = null;
 
@@ -67,7 +72,11 @@ async function call<T>(name: string, ...args: unknown[]): Promise<T> {
   if (typeof fn !== "function") throw new ApiError(`Missing bridge function ${name}`);
   const result = (await fn(...args)) as Envelope<T>;
   if (!result || typeof result !== "object") throw new ApiError("Unexpected response from the engine.");
-  if (!result.ok) throw new ApiError(result.error);
+  if (!result.ok) {
+    const error = new ApiError(result.error);
+    error.fileName = result.name;
+    throw error;
+  }
   return result.data;
 }
 
@@ -99,9 +108,9 @@ export const api = {
       | "clear_cancelled",
   ) => call<number>("queue_action", action),
   revealJob: (id: string) => call<boolean>("reveal_job", id),
-  openJob: (id: string) => call<boolean>("open_job", id),
+  openJob: (id: string, confirmed = false) => call<boolean>("open_job", id, confirmed),
   revealHistory: (id: number) => call<boolean>("reveal_history", id),
-  openHistory: (id: number) => call<boolean>("open_history", id),
+  openHistory: (id: number, confirmed = false) => call<boolean>("open_history", id, confirmed),
   searchHistory: (params: { query: string; kind: string; status: string; limit: number; offset: number }) =>
     call<{ items: HistoryEntry[]; total: number }>("search_history", params),
   clearHistory: () => call<number>("clear_history"),

@@ -20,19 +20,22 @@ from typing import Any
 
 from swiftdrop import binaries
 from swiftdrop.appinfo import APP_NAME, APP_VERSION, BUNDLE_ID
+from swiftdrop.engine.connpool import GLOBAL_POOL
 from swiftdrop.engine.http import HttpDownloader
+from swiftdrop.engine.segmented import SegmentedDownloader
 from swiftdrop.events import ChangeTracker
 from swiftdrop.history import HISTORY_KINDS, HISTORY_STATUSES, HistoryStore
 from swiftdrop.logging_setup import get_logger, set_verbose
 from swiftdrop.models import Collection, DownloadOptions, Job, JobState, MediaKind
 from swiftdrop.paths import AppPaths, is_frozen
 from swiftdrop.platform import NullPlatform, Platform, free_space
+from swiftdrop.platform.quarantine import needs_open_confirmation
 from swiftdrop.preview import PreviewItem, PreviewManager
 from swiftdrop.providers.direct import DirectProvider
 from swiftdrop.providers.registry import ProviderRegistry, SiteMatcher
 from swiftdrop.queue import BatchSummary, DownloadQueue
 from swiftdrop.ratelimit import TokenBucket
-from swiftdrop.settings import SettingsError, SettingsStore, validate_directory
+from swiftdrop.settings import SettingsError, SettingsStore, validate_directory, validate_patch
 from swiftdrop.storage import Database
 from swiftdrop.urls import InvalidUrlError, dedupe_key, display_domain, normalize_url, parse_url_list
 
@@ -49,7 +52,10 @@ def _build_site_matcher(bucket: TokenBucket) -> SiteMatcher | None:
     except ImportError:  # pragma: no cover - yt-dlp is a declared dependency
         log.warning("yt-dlp is not installed; only direct file downloads are available")
         return None
-    return YtDlpProvider(bucket=bucket)
+    return YtDlpProvider(
+        bucket=bucket,
+        segmented_factory=lambda n: SegmentedDownloader(connections=n, pool=GLOBAL_POOL, bucket=bucket),
+    )
 
 
 class AppService:
@@ -62,7 +68,10 @@ class AppService:
         self.history = HistoryStore(self.db)
         current = self.settings.get()
         self.bucket = TokenBucket(current.bandwidth_bytes_per_sec)
-        direct = DirectProvider(lambda: HttpDownloader(bucket=self.bucket))
+        direct = DirectProvider(
+            lambda: HttpDownloader(bucket=self.bucket),
+            lambda connections: SegmentedDownloader(connections=connections, pool=GLOBAL_POOL, bucket=self.bucket),
+        )
         sites = _build_site_matcher(self.bucket) if enable_sites else None
         self.registry = ProviderRegistry(direct=direct, sites=sites)
         self.queue = DownloadQueue(
@@ -315,9 +324,11 @@ class AppService:
             raise ServiceError("The file was moved or deleted.")
         return self.platform.reveal(path)
 
-    def open_file(self, path: Path) -> bool:
+    def open_file(self, path: Path, *, confirmed: bool = False) -> bool:
         if not path.exists():
             raise ServiceError("The file was moved or deleted.")
+        if not confirmed and needs_open_confirmation(path):
+            raise ServiceError("confirm_open")
         return self.platform.open_path(path)
 
     # -- history --------------------------------------------------------------
@@ -384,13 +395,17 @@ class AppService:
     # -- settings ---------------------------------------------------------------
     def update_settings(self, patch: dict[str, Any]) -> dict[str, Any]:
         before = self.settings.get()
-        if "open_at_login" in patch and patch["open_at_login"] != before.open_at_login:
+        try:
+            clean = validate_patch(patch)
+        except SettingsError as exc:
+            raise ServiceError(str(exc)) from exc
+        if "open_at_login" in clean and clean["open_at_login"] != before.open_at_login:
             try:
-                self.platform.set_login_item(bool(patch["open_at_login"]))
+                self.platform.set_login_item(bool(clean["open_at_login"]))
             except RuntimeError as exc:
                 raise ServiceError(str(exc)) from exc
         try:
-            after = self.settings.update(patch)
+            after = self.settings.update(clean)
         except SettingsError as exc:
             raise ServiceError(str(exc)) from exc
         if after.bandwidth_limit_kbps != before.bandwidth_limit_kbps:

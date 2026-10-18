@@ -16,17 +16,23 @@ worker thread, so the queue's concurrency limit bounds it like everything else.
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from swiftdrop import binaries
 from swiftdrop.cancel import CancelToken, JobStopped, StopReason
 from swiftdrop.engine.progress import ProgressUpdate, Throttle
+from swiftdrop.engine.segmented import SegmentedDownloader, SegmentedUnavailable
 from swiftdrop.errors import DownloadFailure, classify_exception, classify_message, failure
 from swiftdrop.filenames import kind_for_extension
 from swiftdrop.logging_setup import get_logger
+from swiftdrop.media.convert import convert_for_quicktime, merge_streams, probe_video_codec
 from swiftdrop.models import DownloadOptions, InspectResult, MediaKind, PlaylistEntry
+from swiftdrop.platform.codecs import hardware_decodes
+from swiftdrop.providers.accel import accelerated_plan, download_streams
 from swiftdrop.providers.base import DownloadOutcome, JobContext
+from swiftdrop.providers.formats import merger_audio_args, needs_quicktime_conversion, quicktime_selector
 from swiftdrop.providers.registry import SiteMatch
 from swiftdrop.providers.sites import extractor_is_playlist, pretty_extractor
 from swiftdrop.ratelimit import TokenBucket
@@ -36,6 +42,7 @@ from swiftdrop.settings import Settings
 log = get_logger("ytdlp")
 
 MAX_PLAYLIST_ENTRIES = 5000
+QUICKTIME_PHASE = "Converting for QuickTime"
 _UNAVAILABLE_TITLES = ("[private video]", "[deleted video]", "[unavailable video]")
 _PP_PHASES = {
     "Merger": "Merging video and audio",
@@ -57,6 +64,26 @@ try:
     from yt_dlp.utils import DownloadCancelled, DownloadError, ExtractorError
 except ImportError as exc:  # pragma: no cover - declared dependency
     raise ImportError("yt-dlp is required for site downloads") from exc
+
+
+def _fragment_retry_sleep(attempt: int) -> float:
+    """Back-off between fragment retries: 1, 2, 4, 8, then 10 s."""
+    return float(min(2**attempt, 10))
+
+
+def _interruptible_backoff(token: CancelToken) -> dict[str, Any]:
+    """yt-dlp ``retry_sleep_functions`` that wait on the job's token instead of sleeping.
+
+    yt-dlp calls the function and then sleeps for whatever it returns. Waiting here and
+    returning 0 lets Pause/Cancel take effect immediately even during a long back-off; once
+    the token is stopped every remaining retry is instant and the job unwinds.
+    """
+
+    def fragment(n: int) -> float:
+        token.wait(_fragment_retry_sleep(n))
+        return 0.0
+
+    return {"fragment": fragment}
 
 
 class _Stopped(DownloadCancelled):
@@ -88,8 +115,14 @@ class _Logger:
         log.warning("[%s] error: %s", self._job, msg)
 
 
-def format_options(options: DownloadOptions, has_ffmpeg: bool) -> dict[str, Any]:
-    """Translate the user's quality/format choice into yt-dlp parameters."""
+def format_options(
+    options: DownloadOptions, has_ffmpeg: bool, hw_decodes: Callable[[str], bool] = hardware_decodes
+) -> dict[str, Any]:
+    """Translate the user's quality/format choice into yt-dlp parameters.
+
+    MP4 uses SwiftDrop's own selector (H.264, else AV1 when this Mac decodes it in hardware, else
+    HEVC, else the best stream converted afterwards) so the file opens in QuickTime Player.
+    """
     if options.audio_only:
         if not has_ffmpeg:
             if options.audio_format != "auto":
@@ -112,11 +145,10 @@ def format_options(options: DownloadOptions, has_ffmpeg: bool) -> dict[str, Any]
             sort.append(f"ext:{options.video_format}")
         return {"format": f"b[height<={height}]/b" if height else "b", "format_sort": sort}
 
-    opts = {"format": "bv*+ba/b"}
     if options.video_format == "mp4":
-        sort += ["vcodec:h264", "acodec:aac", "ext:mp4:m4a"]
-        opts["merge_output_format"] = "mp4"
-    elif options.video_format == "webm":
+        return {"format": quicktime_selector(height, hw_decodes), "merge_output_format": "mp4"}
+    opts = {"format": "bv*+ba/b"}
+    if options.video_format == "webm":
         sort += ["ext:webm:webm"]
         opts["merge_output_format"] = "webm"
     elif options.video_format == "mkv":
@@ -135,18 +167,40 @@ def _quality_label(info: dict[str, Any], options: DownloadOptions) -> str:
     return " · ".join(p for p in parts if p) or options.label()
 
 
+def _video_format(info: dict[str, Any]) -> dict[str, Any] | None:
+    """The chosen video stream (the merged plan's video part, or the single format itself)."""
+    for fmt in info.get("requested_formats") or [info]:
+        if (fmt.get("vcodec") or "") != "none":
+            return fmt
+    return None
+
+
+def _audio_format(info: dict[str, Any]) -> dict[str, Any] | None:
+    """The separate audio stream of a merged plan, if any."""
+    plan = info.get("requested_formats") or []
+    return next((f for f in plan if (f.get("vcodec") or "") == "none"), None)
+
+
+def _wants_quicktime(options: DownloadOptions, has_ffmpeg: bool) -> bool:
+    return has_ffmpeg and not options.audio_only and options.video_format == "mp4"
+
+
 def _is_audio_only(info: dict[str, Any]) -> bool:
     plan = info.get("requested_formats") or [info]
-    return all((f.get("vcodec") or "none") == "none" for f in plan) and any(
-        (f.get("acodec") or "none") != "none" for f in plan
-    )
+    # Same semantics as formats._present: a missing codec (None) is unknown, so maybe present.
+    return all(f.get("vcodec") == "none" for f in plan) and any(f.get("acodec") != "none" for f in plan)
 
 
 class YtDlpProvider:
     name = "ytdlp"
 
-    def __init__(self, bucket: TokenBucket | None = None) -> None:
+    def __init__(
+        self,
+        bucket: TokenBucket | None = None,
+        segmented_factory: Callable[[int], SegmentedDownloader] | None = None,
+    ) -> None:
         self._bucket = bucket
+        self._segmented_factory = segmented_factory
         self._lock = threading.Lock()
         self._extractors: list[Any] | None = None
 
@@ -191,7 +245,9 @@ class YtDlpProvider:
             "fragment_retries": 10,
             "extractor_retries": 2,
             "file_access_retries": 3,
-            "concurrent_fragment_downloads": 4,
+            "concurrent_fragment_downloads": 8,
+            # A missing fragment fails the job instead of producing a gapped "completed" file.
+            "skip_unavailable_fragments": False,
             "continuedl": True,
             "updatetime": False,
             "windowsfilenames": False,
@@ -235,6 +291,7 @@ class YtDlpProvider:
         token.raise_if_stopped()
         logger = _Logger("inspect")
         opts = self._base_options(settings, logger)
+        opts["retry_sleep_functions"] = _interruptible_backoff(token)
         opts.update(
             {
                 "skip_download": True,
@@ -350,7 +407,8 @@ class YtDlpProvider:
         settings = ctx.settings
         has_ffmpeg = binaries.find_ffmpeg() is not None
         opts = self._base_options(settings, logger)
-        opts.update(format_options(ctx.options, has_ffmpeg))
+        opts["retry_sleep_functions"] = _interruptible_backoff(token)
+        opts.update(format_options(ctx.options, has_ffmpeg, hardware_decodes))
         opts.update(
             {
                 "noplaylist": True,
@@ -372,6 +430,15 @@ class YtDlpProvider:
                 token.raise_if_stopped()
                 if not isinstance(info, dict):
                     raise failure("unsupported", "no information returned")
+                if info.get("is_live"):
+                    raise failure(
+                        "live",
+                        "is_live",
+                        title="Live streams aren't supported",
+                        message="This is a live broadcast that's still in progress.",
+                        hint="Try again after the broadcast has ended.",
+                        retryable=False,
+                    )
                 if info.get("_type") in ("playlist", "multi_video"):
                     raise failure(
                         "unsupported",
@@ -390,8 +457,20 @@ class YtDlpProvider:
                     quality_label=_quality_label(info, ctx.options),
                     kind=MediaKind.AUDIO if ctx.options.audio_only or _is_audio_only(info) else MediaKind.VIDEO,
                 )
+                if _wants_quicktime(ctx.options, has_ffmpeg):
+                    # The merger reads its arguments when it runs, so this applies to this download.
+                    args = merger_audio_args(_audio_format(info))
+                    if args:
+                        ydl.params["postprocessor_args"] = args
                 ctx.checkpoint()
-                result = ydl.process_ie_result(info, download=True)
+                accelerated: Path | None = None
+                plan = self._accelerated_plan(ctx, info, has_ffmpeg)
+                if plan is not None:
+                    try:
+                        accelerated = self._download_accelerated(ctx, ydl, info, plan)
+                    except SegmentedUnavailable:
+                        log.info("[%s] Server can't do ranges; using yt-dlp's downloader", ctx.job_id)
+                result = info if accelerated is not None else ydl.process_ie_result(info, download=True)
         except BaseException as exc:
             if isinstance(exc, KeyboardInterrupt | SystemExit):
                 raise
@@ -400,19 +479,126 @@ class YtDlpProvider:
         token.raise_if_stopped()
         downloads = (result or {}).get("requested_downloads") or []
         filepath = downloads[0].get("filepath") or downloads[0].get("_filename") if downloads else None
+        if accelerated is not None:
+            filepath = str(accelerated)
         if not filepath or not Path(filepath).exists():
             detail = "; ".join(logger.warnings[-3:]) or "yt-dlp reported success but no file was produced"
             raise failure("unknown", detail)
         path = Path(filepath)
+        name = path.name
+        audio_only = ctx.options.audio_only or _is_audio_only(result)
+        if not audio_only and _wants_quicktime(ctx.options, has_ffmpeg):
+            converted = self._make_quicktime_playable(ctx, result, path, audio_is_aac=accelerated is not None)
+            if converted != path:
+                path, name = converted, f"{path.stem}.mp4"
         size = path.stat().st_size
-        if ctx.options.audio_only or _is_audio_only(result):
+        if audio_only:
             kind = MediaKind.AUDIO
         else:
             by_ext = kind_for_extension(path.suffix.lstrip("."))
             kind = by_ext if by_ext not in (MediaKind.UNKNOWN, MediaKind.OTHER) else MediaKind.VIDEO
         ctx.report(ProgressUpdate(phase="Saving", processing=True))
-        final = ctx.finalize(path, path.name, kind)
+        final = ctx.finalize(path, name, kind)
         return DownloadOutcome(filepath=final, size=size, kind=kind)
+
+    def _accelerated_plan(self, ctx: JobContext, info: dict[str, Any], has_ffmpeg: bool) -> list[dict[str, Any]] | None:
+        """Plain HTTP(S) streams that can go through the segmented engine, else None (yt-dlp downloads)."""
+        if self._segmented_factory is None or not has_ffmpeg or ctx.options.audio_only:
+            return None
+        if ctx.options.video_format not in ("mp4", "mkv"):
+            return None  # WebM output depends on yt-dlp's own stream choice
+        return accelerated_plan(info)
+
+    def _download_accelerated(
+        self, ctx: JobContext, ydl: Any, info: dict[str, Any], plan: list[dict[str, Any]]
+    ) -> Path:
+        """Download the planned streams in parallel, then mux them into the staging folder."""
+        factory = self._segmented_factory
+        assert factory is not None
+        ffmpeg = binaries.find_ffmpeg()
+        if ffmpeg is None:
+            raise failure("ffmpeg_missing", "merging needs FFmpeg")
+
+        def refresh(format_id: str) -> dict[str, Any]:
+            fresh = ydl.extract_info(ctx.url, download=False)
+            if isinstance(fresh, dict):
+                for fmt in [*(fresh.get("requested_formats") or [fresh]), *(fresh.get("formats") or [])]:
+                    if str(fmt.get("format_id")) == format_id and fmt.get("url"):
+                        return dict(fmt)
+            raise failure(
+                "expired", f"format {format_id} missing after refresh", message="The link couldn't be renewed."
+            )
+
+        connections = ctx.settings.connections_per_download
+        cookies = ydl.cookiejar if len(ydl.cookiejar) else None
+        paths = download_streams(plan, ctx, refresh, lambda: factory(connections), cookies=cookies)
+        video = next((p for p, f in zip(paths, plan, strict=True) if (f.get("vcodec") or "none") != "none"), paths[0])
+        audio = next(
+            (p for p, f in zip(paths, plan, strict=True) if p != video and (f.get("vcodec") or "none") == "none"), None
+        )
+        audio_fmt = _audio_format(info)
+        to_aac = ctx.options.video_format == "mp4" and audio is not None and merger_audio_args(audio_fmt) is not None
+        dst = Path(ydl.prepare_filename(info)).with_suffix(f".{ctx.options.video_format}")
+        ctx.report(ProgressUpdate(phase=_PP_PHASES["Merger"], processing=True))
+        merge_streams(video, audio, dst, ffmpeg=ffmpeg, token=ctx.token, audio_to_aac=to_aac)
+        for part in paths:
+            part.unlink(missing_ok=True)
+        ctx.meta.pop("streams", None)
+        return dst
+
+    @staticmethod
+    def _make_quicktime_playable(
+        ctx: JobContext, info: dict[str, Any], path: Path, *, audio_is_aac: bool = False
+    ) -> Path:
+        """Re-encode to HEVC when QuickTime can't play the downloaded video codec.
+
+        Returns the converted file (in the staging folder) or ``path`` when no conversion is needed.
+        """
+        video = _video_format(info)
+        if video is None:
+            return path
+        vcodec = video.get("vcodec")
+        kbps = video.get("vbr") or video.get("tbr")
+        bitrate = int(kbps * 1000) if isinstance(kbps, int | float) and kbps > 0 else None
+        if not vcodec:
+            # The site didn't say (generic HLS, plain files): ask the file itself.
+            ffprobe = binaries.find_ffprobe()
+            if ffprobe is None:
+                log.info("[%s] Video codec unknown and ffprobe missing; not converting", ctx.job_id)
+                return path
+            vcodec, probed = probe_video_codec(path, ffprobe)
+            bitrate = bitrate or probed
+        if not vcodec or not needs_quicktime_conversion(vcodec, hardware_decodes):
+            return path
+        ffmpeg = binaries.find_ffmpeg()
+        if ffmpeg is None:
+            raise failure("ffmpeg_missing", "QuickTime conversion needs FFmpeg")
+        log.info("[%s] Converting %s video for QuickTime", ctx.job_id, vcodec)
+        throttle = Throttle(0.25)
+
+        def on_progress(fraction: float) -> None:
+            if fraction >= 1.0 or throttle.ready():
+                ctx.report(ProgressUpdate(phase=QUICKTIME_PHASE, processing=True, progress=fraction))
+
+        ctx.report(ProgressUpdate(phase=QUICKTIME_PHASE, processing=True, progress=0.0))
+        target = path.with_name(f"{path.stem}.hevc.mp4")
+        audio = _audio_format(info) or (info if (info.get("acodec") or "none") != "none" else None)
+        audio_codec = str(audio["acodec"]).split(".")[0] if audio and audio.get("acodec") else None
+        if audio_is_aac or merger_audio_args(_audio_format(info)) is not None:
+            audio_codec = "aac"  # the merge already transcoded it; copy, don't encode twice
+        duration = info.get("duration")
+        convert_for_quicktime(
+            path,
+            target,
+            ffmpeg=ffmpeg,
+            token=ctx.token,
+            on_progress=on_progress,
+            duration=float(duration) if isinstance(duration, int | float) else None,
+            source_bitrate=bitrate,
+            audio_codec=audio_codec,
+        )
+        path.unlink(missing_ok=True)
+        return target
 
 
 class _ProgressTracker:
@@ -426,6 +612,7 @@ class _ProgressTracker:
         self._planned_sizes: list[int | None] = []
         self._final_sizes: dict[int, int] = {}
         self._current = 0
+        self._max_progress = 0.0
 
     def plan(self, info: dict[str, Any]) -> None:
         plan = info.get("requested_formats") or [info]
@@ -473,15 +660,12 @@ class _ProgressTracker:
         downloaded = done_before + downloaded_part
         total = int(sum(t for t in totals if t)) if all(totals) else None
         speed = d.get("speed")
-        progress: float | None
-        eta: float | None
-        if total:
-            progress = min(1.0, downloaded / total)
-            eta = (total - downloaded) / speed if speed else None
-        else:
-            frag_index, frag_count = d.get("fragment_index"), d.get("fragment_count")
-            progress = (frag_index / frag_count) if frag_index and frag_count else None
-            eta = d.get("eta")
+        eta: float | None = None
+        if total and speed:
+            eta = (total - downloaded) / speed
+        elif not total and parts == 1:
+            eta = d.get("eta")  # yt-dlp's ETA covers only the current stream
+        progress = self._overall_progress(index, parts, d, downloaded_part, current_total)
         label = self._kinds[index] if index < len(self._kinds) else "media"
         phase = f"Downloading {label} ({index + 1}/{parts})" if parts > 1 else "Downloading"
         ctx.report(
@@ -495,6 +679,29 @@ class _ProgressTracker:
                 phase=phase,
             )
         )
+
+    def _overall_progress(
+        self, index: int, parts: int, d: dict[str, Any], downloaded_part: int, current_total: float | None
+    ) -> float | None:
+        """Weighted progress across streams that never goes backwards.
+
+        Each stream is weighted by its planned size (filesize / filesize_approx); when any
+        size is unknown all streams weigh the same. Finished streams count as complete.
+        """
+        if current_total:
+            fraction: float | None = downloaded_part / current_total
+        else:
+            frag_index, frag_count = d.get("fragment_index"), d.get("fragment_count")
+            fraction = (frag_index / frag_count) if frag_index and frag_count else None
+        if fraction is None:
+            return self._max_progress or None
+        sizes = [self._planned_sizes[i] if i < len(self._planned_sizes) else None for i in range(parts)]
+        known = [float(size) for size in sizes if size]
+        weights = known if len(known) == parts else [1.0] * parts
+        done = sum(weights[i] for i in range(parts) if i in self._final_sizes and i != index)
+        overall = (done + weights[index] * min(1.0, fraction)) / sum(weights)
+        self._max_progress = max(self._max_progress, min(1.0, overall))
+        return self._max_progress
 
     def on_postprocess(self, d: dict[str, Any]) -> None:
         if self._ctx.token.stopped and d.get("status") == "started":

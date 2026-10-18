@@ -175,3 +175,19 @@ export function ConfirmDialog({
     </Modal>
   );
 }
+
+export function OpenConfirmDialog() {
+  const pending = useStore((s) => s.openConfirm);
+  const setPending = useStore((s) => s.setOpenConfirm);
+  return (
+    <ConfirmDialog
+      open={pending !== null}
+      title="Open this file?"
+      body={`\u201C${pending?.name ?? ""}\u201D can run code on your Mac. Open it anyway?`}
+      confirmLabel="Open"
+      danger
+      onClose={() => setPending(null)}
+      onConfirm={() => pending?.run()}
+    />
+  );
+}

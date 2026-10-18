@@ -220,10 +220,13 @@ def choose_filename(
     name = sanitize_filename(name or DEFAULT_STEM)
     stem, ext = split_ext(name)
     mime_ext = extension_for_mime(content_type)
-    if not ext and mime_ext:
+    # Add the MIME extension when there is none, or swap an unknown extension
+    # (e.g. watch.php served as video/mp4) for the media type's extension.
+    # Stream manifests (.m3u8, .mpd) are kept: their MIME maps to a different suffix.
+    media_mime = kind_for_mime(content_type) in {MediaKind.VIDEO, MediaKind.AUDIO, MediaKind.IMAGE}
+    unknown_ext = ext not in DIRECT_FILE_EXTS and ext not in STREAM_MANIFEST_EXTS
+    if mime_ext and (not ext or (unknown_ext and media_mime)):
         name = sanitize_filename(f"{stem}.{mime_ext}")
-    elif ext and mime_ext and kind_for_extension(ext) == MediaKind.UNKNOWN:
-        name = sanitize_filename(f"{name}.{mime_ext}")
     return name
 
 

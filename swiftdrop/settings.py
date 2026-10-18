@@ -26,6 +26,7 @@ class Settings:
     organize_by_type: bool = False
     playlist_subfolders: bool = True
     max_concurrent: int = 3
+    connections_per_download: int = 4
     theme: str = "system"
     default_quality: str = "best"
     default_video_format: str = "mp4"
@@ -103,6 +104,7 @@ _VALIDATORS: dict[str, Callable[[Any], Any]] = {
     "organize_by_type": lambda v: _bool("Organize by type", v),
     "playlist_subfolders": lambda v: _bool("Playlist folders", v),
     "max_concurrent": lambda v: _int("Simultaneous downloads", v, 1, MAX_CONCURRENCY),
+    "connections_per_download": lambda v: _int("Connections per download", v, 1, 16),
     "theme": lambda v: _choice("Theme", v, THEMES),
     "default_quality": lambda v: _choice("Default quality", v, QUALITY_CHOICES),
     "default_video_format": lambda v: _choice("Default video format", v, VIDEO_FORMAT_CHOICES),

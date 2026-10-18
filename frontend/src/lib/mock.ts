@@ -22,6 +22,7 @@ const settings: Settings = {
   organize_by_type: false,
   playlist_subfolders: true,
   max_concurrent: 3,
+  connections_per_download: 4,
   theme: "system",
   default_quality: "best",
   default_video_format: "mp4",
@@ -193,7 +194,7 @@ function makeJob(item: PreviewItem, title: string, extra: Partial<Job> = {}): Jo
     provider: item.link.provider, title, source: item.source, kind: item.kind === "unknown" ? "video" : item.kind, state: "queued",
     created_at: Date.now() / 1000, order: counter, collection_id: null, playlist_index: null, thumbnail: null, extractor: item.info?.extractor ?? null,
     duration: item.info?.duration ?? null, phase: "", downloaded_bytes: 0, total_bytes: item.info?.size ?? 18_000_000, total_is_estimate: false,
-    speed: null, eta: null, progress: null, filename: null, filepath: null, file_size: null, quality_label: "Best · MP4", error: null,
+    speed: null, connections: null, eta: null, progress: null, filename: null, filepath: null, file_size: null, quality_label: "Best · MP4", error: null,
     attempts: 0, started_at: null, finished_at: null, resumable: true, note: null, file_missing: false, sha256: null, ...extra,
   };
 }

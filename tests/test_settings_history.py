@@ -113,3 +113,19 @@ def test_history_find_completed_ignores_missing_files(tmp_path):
     history.record(job)
     (tmp_path / "temp.mp4").unlink()
     assert history.find_completed(job.key) is None
+
+
+def test_invalid_patch_leaves_login_item_untouched(tmp_path):
+    from swiftdrop.paths import AppPaths
+    from swiftdrop.platform import NullPlatform
+    from swiftdrop.service import AppService, ServiceError
+
+    paths = AppPaths(data_dir=tmp_path / "data", logs_dir=tmp_path / "logs", partial_dir=tmp_path / "partial")
+    platform = NullPlatform()
+    svc = AppService(paths, platform, enable_sites=False)
+    try:
+        with pytest.raises(ServiceError):
+            svc.update_settings({"open_at_login": True, "theme": "bogus"})
+        assert platform.login_item_calls == []
+    finally:
+        svc.shutdown()

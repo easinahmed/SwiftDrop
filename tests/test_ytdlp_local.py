@@ -91,7 +91,9 @@ def preview_ready(service, count):
 
 
 def test_format_options_mapping():
-    assert format_options(DownloadOptions("1080", "mp4", "m4a"), True)["format_sort"][:2] == ["res:1080", "vcodec:h264"]
+    mp4 = format_options(DownloadOptions("1080", "mp4", "m4a"), True)
+    assert callable(mp4["format"]) and mp4["merge_output_format"] == "mp4"
+    assert format_options(DownloadOptions("1080", "mkv", "m4a"), True)["format_sort"] == ["res:1080"]
     assert format_options(DownloadOptions("best", "mkv", "m4a"), True)["merge_output_format"] == "mkv"
     audio = format_options(DownloadOptions("audio", "mp4", "mp3"), True)
     assert audio["postprocessors"][0]["preferredcodec"] == "mp3"
@@ -166,7 +168,8 @@ def test_hls_stream_downloads_and_merges(tmp_path, http_server, media_dir, downl
             text=True,
         )
         assert "Video: h264" in probe.stderr and "Audio: aac" in probe.stderr
-        assert not service.queue.staging_dir(job_id).exists()
+        # The finished job deletes its staging folder after the state flips.
+        assert wait_for(lambda: not service.queue.staging_dir(job_id).exists())
     finally:
         service.shutdown()
 
@@ -322,3 +325,206 @@ def test_live_permitted_sources_inspect():
     video = provider.inspect("https://www.youtube.com/watch?v=aqz-KE-bpKQ", CancelToken(), Settings())
     assert not video.is_playlist and "Big Buck Bunny" in video.title
     assert 1080 in video.heights
+
+
+def test_missing_fragment_fails_job(tmp_path, http_server, ffmpeg_path, downloads_dir, monkeypatch):
+    import swiftdrop.providers.ytdlp as ytdlp_module
+
+    # Retry instantly in tests; production waits min(2**n, 10) s between fragment retries.
+    monkeypatch.setattr(ytdlp_module, "_fragment_retry_sleep", lambda n: 0, raising=False)
+    broken = tmp_path / "broken"
+    hls = broken / "hls"
+    hls.mkdir(parents=True)
+    # One keyframe per second so the 6 s clip really is cut into ~6 segments.
+    subprocess.run(
+        [str(ffmpeg_path), "-hide_banner", "-loglevel", "error", "-y",
+         "-f", "lavfi", "-i", "testsrc=duration=6:size=320x240:rate=15",
+         "-f", "lavfi", "-i", "sine=frequency=440:duration=6",
+         "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-g", "15", "-c:a", "aac", "-shortest",
+         "-f", "hls", "-hls_time", "1", "-hls_list_size", "0",
+         "-hls_segment_filename", str(hls / "seg%03d.ts"), str(hls / "index.m3u8")],
+        check=True,
+    )  # fmt: skip
+    assert len(list(hls.glob("seg*.ts"))) >= 4
+    (hls / "seg002.ts").unlink()  # a middle segment now answers 404
+    http_server.static_dirs["broken"] = broken
+    service = make_service(tmp_path, downloads_dir)
+    try:
+        service.settings.update({"auto_inspect": False})
+        (item,) = service.analyze_text(http_server.url("/static/broken/hls/index.m3u8"))["added"]
+        job_id = service.start_downloads([{"id": item["id"], "entries": None}], None, None)["job_ids"][0]
+        assert wait_for(lambda: service.queue.get(job_id).state in (JobState.COMPLETED, JobState.FAILED), timeout=90)
+        assert service.queue.get(job_id).state == JobState.FAILED, "a gapped stream must never be 'completed'"
+        assert list(downloads_dir.iterdir()) == []
+    finally:
+        service.shutdown()
+
+
+class _ProviderCtx:
+    """Minimal JobContext for driving YtDlpProvider.download directly."""
+
+    def __init__(self, tmp_path: Path) -> None:
+        self.job_id = "0123456789abcdef"
+        self.url = "https://live.example.com/stream"
+        self.options = DownloadOptions()
+        self.settings = Settings()
+        self.token = CancelToken()
+        self.staging_dir = tmp_path / "staging"
+        self.staging_dir.mkdir()
+        self.meta: dict = {}
+        self.collection_folder = None
+
+    def report(self, update):
+        pass
+
+    def set_info(self, **fields):
+        pass
+
+    def checkpoint(self):
+        pass
+
+    def finalize(self, source, filename, kind):
+        raise AssertionError("a live stream must never be finalized")
+
+
+def test_live_stream_refused(tmp_path, monkeypatch):
+    import yt_dlp
+
+    from swiftdrop.errors import DownloadFailure
+
+    def fake_extract_info(self, url, download=True, **kwargs):
+        return {"id": "live1", "title": "Now streaming", "is_live": True, "extractor": "generic", "ext": "mp4",
+                "url": url, "formats": [{"format_id": "0", "url": url, "ext": "mp4", "protocol": "m3u8_native"}]}
+
+    monkeypatch.setattr(yt_dlp.YoutubeDL, "extract_info", fake_extract_info)
+    monkeypatch.setattr(yt_dlp.YoutubeDL, "process_ie_result", lambda self, info, download=True: info)
+    with pytest.raises(DownloadFailure) as info:
+        YtDlpProvider().download(_ProviderCtx(tmp_path))
+    assert "Live streams" in info.value.info.title
+    assert info.value.info.retryable is False
+
+
+def test_split_progress_never_decreases():
+    ctx = _FakeCtx()
+    tracker = _ProgressTracker(ctx)  # type: ignore[arg-type]
+    tracker._throttle.ready = lambda force=False: True  # type: ignore[method-assign]
+    # bv*+ba where both are HLS formats without any size information (split-audio HLS)
+    tracker.plan({"requested_formats": [
+        {"format_id": "hls-1080", "vcodec": "avc1", "acodec": "none"},
+        {"format_id": "hls-audio", "vcodec": "none", "acodec": "mp4a"},
+    ]})
+    for fid, n in (("hls-1080", 10), ("hls-audio", 10)):
+        for i in range(1, n + 1):
+            tracker.on_progress({"status": "downloading", "info_dict": {"format_id": fid},
+                                 "downloaded_bytes": i * 1000, "total_bytes_estimate": n * 1000,
+                                 "fragment_index": i, "fragment_count": n, "speed": 1000.0})
+        tracker.on_progress({"status": "finished", "info_dict": {"format_id": fid}, "total_bytes": n * 1000})
+    values = [u.progress for u in ctx.updates]
+    assert all(v is not None for v in values)
+    assert values == sorted(values), values
+    assert values[-1] == pytest.approx(1.0)
+
+
+def test_pause_during_fragment_backoff_is_prompt(tmp_path, http_server, ffmpeg_path, downloads_dir, monkeypatch):
+    import time
+
+    import swiftdrop.providers.ytdlp as ytdlp_module
+
+    monkeypatch.setattr(ytdlp_module, "_fragment_retry_sleep", lambda n: 5.0)  # a long back-off
+    hls = tmp_path / "backoff" / "hls"
+    hls.mkdir(parents=True)
+    subprocess.run(
+        [str(ffmpeg_path), "-hide_banner", "-loglevel", "error", "-y",
+         "-f", "lavfi", "-i", "testsrc=duration=6:size=320x240:rate=15",
+         "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-g", "15",
+         "-f", "hls", "-hls_time", "1", "-hls_list_size", "0",
+         "-hls_segment_filename", str(hls / "seg%03d.ts"), str(hls / "index.m3u8")],
+        check=True,
+    )  # fmt: skip
+    (hls / "seg002.ts").unlink()
+    http_server.static_dirs["backoff"] = tmp_path / "backoff"
+    service = make_service(tmp_path, downloads_dir)
+    try:
+        service.settings.update({"auto_inspect": False})
+        (item,) = service.analyze_text(http_server.url("/static/backoff/hls/index.m3u8"))["added"]
+        job_id = service.start_downloads([{"id": item["id"], "entries": None}], None, None)["job_ids"][0]
+        # Wait until the missing fragment has been requested, i.e. the retry back-off is running.
+        assert wait_for(lambda: any(p.endswith("seg002.ts") for p, _ in http_server.requests), timeout=30)
+        time.sleep(0.3)
+        service.queue.pause([job_id])
+        assert wait_for(lambda: service.queue.get(job_id).state == JobState.PAUSED, timeout=3), (
+            "pause must not wait for the fragment back-off to finish"
+        )
+    finally:
+        service.shutdown()
+
+
+def _vp9_hls(ffmpeg: Path, root: Path) -> Path:
+    """A VP9 + AAC stream in fragmented-MP4 HLS: QuickTime can't play VP9, so it must be converted."""
+    hls = root / "hls"
+    hls.mkdir(parents=True)
+    subprocess.run(
+        [str(ffmpeg), "-hide_banner", "-loglevel", "error", "-y",
+         "-f", "lavfi", "-i", "testsrc=duration=6:size=320x240:rate=15",
+         "-f", "lavfi", "-i", "sine=frequency=440:duration=6",
+         "-c:v", "libvpx-vp9", "-deadline", "realtime", "-cpu-used", "8", "-pix_fmt", "yuv420p", "-g", "15",
+         "-c:a", "aac", "-shortest",
+         "-f", "hls", "-hls_segment_type", "fmp4", "-hls_time", "1", "-hls_list_size", "0",
+         "-hls_segment_filename", str(hls / "seg%03d.m4s"), str(hls / "index.m3u8")],
+        check=True,
+    )  # fmt: skip
+    return root
+
+
+@pytest.mark.parametrize("codec", ["h264", "vp9"])
+def test_hls_mp4_download_is_quicktime_playable(
+    codec, tmp_path, http_server, media_dir, ffmpeg_path, downloads_dir, check_playable
+):
+    root = media_dir if codec == "h264" else _vp9_hls(ffmpeg_path, tmp_path / "vp9")
+    http_server.static_dirs["media"] = root
+    service = make_service(tmp_path, downloads_dir)
+    try:
+        service.settings.update({"auto_inspect": False})
+        (item,) = service.analyze_text(http_server.url("/static/media/hls/index.m3u8"))["added"]
+        job_id = service.start_downloads([{"id": item["id"], "entries": None}], {"video_format": "mp4"}, None)[
+            "job_ids"
+        ][0]
+        assert wait_for(lambda: service.queue.get(job_id).state in (JobState.COMPLETED, JobState.FAILED), timeout=90)
+        job = service.queue.get(job_id)
+        assert job.state == JobState.COMPLETED, job.error
+        path = Path(job.filepath)
+        assert path.suffix == ".mp4" and path.parent == downloads_dir
+        assert [p.name for p in downloads_dir.iterdir()] == [path.name]
+        probe = subprocess.run([str(ffmpeg_path), "-hide_banner", "-i", str(path)], capture_output=True, text=True)
+        expected = "Video: h264" if codec == "h264" else "Video: hevc"
+        assert expected in probe.stderr and "Audio: aac" in probe.stderr
+        report = check_playable(path)
+        assert "playable=true videoDecodable=true audioDecodable=true" in report, report
+    finally:
+        service.shutdown()
+
+
+def test_opus_audio_gets_aac_merge_args(tmp_path, monkeypatch):
+    import yt_dlp
+
+    from swiftdrop.errors import DownloadFailure
+
+    video = {"format_id": "315", "ext": "webm", "protocol": "https", "vcodec": "vp9", "acodec": "none", "height": 2160}
+    audio = {"format_id": "251", "ext": "webm", "protocol": "https", "vcodec": "none", "acodec": "opus", "abr": 135}
+    seen: dict = {}
+
+    def fake_extract_info(self, url, download=True, **kwargs):
+        return {"id": "v1", "title": "Opus only", "extractor": "generic", "formats": [video, audio],
+                "requested_formats": [video, audio], "format_id": "315+251", "ext": "mp4"}
+
+    def fake_process(self, info, download=True):
+        seen["args"] = self.params.get("postprocessor_args")
+        return {**info, "requested_downloads": []}
+
+    monkeypatch.setattr(yt_dlp.YoutubeDL, "extract_info", fake_extract_info)
+    monkeypatch.setattr(yt_dlp.YoutubeDL, "process_ie_result", fake_process)
+    ctx = _ProviderCtx(tmp_path)
+    ctx.options = DownloadOptions("2160", "mp4", "m4a")
+    with pytest.raises(DownloadFailure):  # nothing was really downloaded
+        YtDlpProvider().download(ctx)
+    assert seen["args"] == {"merger+ffmpeg_o": ["-c:a", "aac", "-b:a", "192k"]}

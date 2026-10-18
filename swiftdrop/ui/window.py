@@ -10,6 +10,7 @@ from swiftdrop.paths import web_root
 from swiftdrop.service import AppService
 from swiftdrop.ui import devtools
 from swiftdrop.ui.bridge import Bridge
+from swiftdrop.ui.navlock import install_navigation_lock
 
 log = get_logger("window")
 
@@ -50,6 +51,7 @@ def run(service: AppService, *, debug: bool = False) -> None:
     dark = theme == "dark" or (theme == "system" and system_prefers_dark())
     background = "#161618" if dark else "#f4f4f6"
 
+    install_navigation_lock(index.as_uri())
     bridge = Bridge(service)
     # Load from file:// rather than a path: pywebview would otherwise start a local HTTP
     # server for the UI (an extra listening socket, and HTTPServer's reverse-DNS lookup

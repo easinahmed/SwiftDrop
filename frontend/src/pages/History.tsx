@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Copy, ExternalLink, FileDown, FolderSearch, History as HistoryIcon, Search, Trash2, X } from "lucide-react";
 import { api } from "../lib/api";
 import { formatBytes, formatRelative, pluralize } from "../lib/format";
+import { openWithConfirm } from "../lib/openFile";
 import { errorMessage, useStore } from "../lib/store";
 import type { HistoryEntry, MediaKind } from "../lib/types";
 import { Thumb } from "../components/media";
@@ -173,7 +174,7 @@ export function HistoryPage() {
                   <div className="flex shrink-0 items-center gap-0.5 opacity-80 group-hover:opacity-100">
                     {entry.file_exists && (
                       <>
-                        <IconButton label="Open" onClick={() => act(() => api.openHistory(entry.id))}>
+                        <IconButton label="Open" onClick={() => act(() => openWithConfirm((confirmed) => api.openHistory(entry.id, confirmed)))}>
                           <ExternalLink className="size-4" />
                         </IconButton>
                         <IconButton label="Show in Finder" onClick={() => act(() => api.revealHistory(entry.id))}>

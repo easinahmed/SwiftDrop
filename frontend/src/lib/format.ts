@@ -17,6 +17,11 @@ export function formatSpeed(bytesPerSecond: number | null | undefined): string |
   return `${formatBytes(bytesPerSecond)}/s`;
 }
 
+export function formatConnections(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(n) || n < 1) return "";
+  return n === 1 ? "1 connection" : `${n} connections`;
+}
+
 export function formatEta(seconds: number | null | undefined): string | null {
   if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return null;
   if (seconds < 1) return "almost done";

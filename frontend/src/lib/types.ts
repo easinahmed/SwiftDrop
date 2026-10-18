@@ -54,6 +54,7 @@ export interface Job {
   total_bytes: number | null;
   total_is_estimate: boolean;
   speed: number | null;
+  connections: number | null;
   eta: number | null;
   progress: number | null;
   filename: string | null;
@@ -145,6 +146,7 @@ export interface Settings {
   organize_by_type: boolean;
   playlist_subfolders: boolean;
   max_concurrent: number;
+  connections_per_download: number;
   theme: Theme;
   default_quality: Quality;
   default_video_format: VideoFormat;

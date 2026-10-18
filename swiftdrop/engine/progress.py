@@ -18,6 +18,7 @@ class ProgressUpdate:
     progress: float | None = None
     phase: str | None = None
     processing: bool = False  # post-processing (merge / convert / move) rather than transferring
+    connections: int | None = None  # open data connections of a multi-connection download
 
 
 class SpeedMeter:

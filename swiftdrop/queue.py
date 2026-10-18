@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -40,6 +41,7 @@ from swiftdrop.models import (
     JobState,
     MediaKind,
 )
+from swiftdrop.platform.quarantine import apply_quarantine
 from swiftdrop.providers.base import DownloadOutcome
 from swiftdrop.providers.registry import ProviderRegistry
 from swiftdrop.settings import Settings, SettingsStore
@@ -69,6 +71,7 @@ class _Running:
     thread: threading.Thread
     token: CancelToken
     remove_when_done: bool = False
+    resume_requested: bool = False  # "Resume" arrived while a pause was still unwinding
 
 
 @dataclass
@@ -123,7 +126,9 @@ class _Context:
             if not os.access(directory, os.W_OK | os.X_OK):
                 raise failure("permission", f"not writable: {directory}")
             target = reserve_unique_path(directory, filename)
-            return move_into_place(source, target)
+            final = move_into_place(source, target)
+            apply_quarantine(final, origin_url=self.url)
+            return final
         except DownloadFailure:
             raise
         except OSError as exc:
@@ -154,6 +159,10 @@ class DownloadQueue:
         self._jobs: dict[str, Job] = {}
         self._collections: dict[str, Collection] = {}
         self._running: dict[str, _Running] = {}
+        # Staging folders being deleted, counted per owner (cleanup, cancel, finish); a job
+        # can't start while any owner still holds its folder, and each owner releases only
+        # its own hold.
+        self._reserved: Counter[str] = Counter()
         self._order = 0
         self._stopping = False
         self._dispatcher: threading.Thread | None = None
@@ -175,7 +184,9 @@ class DownloadQueue:
             for job in self._db.load_jobs():
                 job.speed = None
                 job.eta = None
-                if job.state in ACTIVE_STATES:
+                if job.state not in FINISHED_STATES and self._restore_bytes_from_disk(job):
+                    changed.append(job)
+                if job.state in ACTIVE_STATES or (resume and job.state == JobState.INTERRUPTED):
                     job.state = JobState.QUEUED if resume else JobState.INTERRUPTED
                     job.phase = ""
                     job.note = "Interrupted when the app quit — resume to continue."
@@ -191,6 +202,17 @@ class DownloadQueue:
             self._drop_orphan_collections()
         if changed:
             self._db.save_jobs(changed)
+
+    def _restore_bytes_from_disk(self, job: Job) -> bool:
+        """After a crash the last checkpoint can lag behind; the partial data on disk doesn't."""
+        staging = self.staging_dir(job.id)
+        staged = dir_size(staging) if staging.exists() else 0
+        if staged <= (job.downloaded_bytes or 0):
+            return False
+        job.downloaded_bytes = staged
+        if job.total_bytes:
+            job.progress = min(1.0, staged / job.total_bytes)
+        return True
 
     def start(self) -> None:
         with self._lock:
@@ -216,9 +238,22 @@ class DownloadQueue:
         with self._lock:
             for job in self._jobs.values():
                 if job.state in ACTIVE_STATES:
-                    job.state = JobState.INTERRUPTED
+                    job.state = self._state_at_quit(self._running.get(job.id))
                     job.speed = job.eta = None
+                    job.phase = ""
+                    if job.state == JobState.CANCELLED:
+                        job.finished_at = time.time()
             self._db.save_jobs(list(self._jobs.values()))
+
+    @staticmethod
+    def _state_at_quit(running: _Running | None) -> JobState:
+        """A pause or cancel the user asked for still counts if it hadn't finished unwinding."""
+        reason = running.token.reason if running is not None else None
+        if reason == StopReason.CANCEL:
+            return JobState.CANCELLED
+        if reason == StopReason.PAUSE and running is not None and not running.resume_requested:
+            return JobState.PAUSED
+        return JobState.INTERRUPTED
 
     def notify_settings_changed(self) -> None:
         with self._cond:
@@ -228,7 +263,8 @@ class DownloadQueue:
         return self._partial_root / job_id
 
     # -- adding -----------------------------------------------------------
-    def add(self, jobs: Iterable[Job], collection: Collection | None = None) -> list[str]:
+    def add(self, jobs: Iterable[Job], collection: Collection | None = None, *, paused: bool = False) -> list[str]:
+        """Queue jobs; with ``paused=True`` they wait for an explicit resume ("Start later")."""
         added: list[Job] = []
         with self._cond:
             if collection is not None:
@@ -237,7 +273,7 @@ class DownloadQueue:
             for job in jobs:
                 job.order = self._order
                 self._order += 1
-                job.state = JobState.QUEUED
+                job.state = JobState.PAUSED if paused else JobState.QUEUED
                 if collection is not None:
                     job.collection_id = collection.id
                 self._jobs[job.id] = job
@@ -257,21 +293,54 @@ class DownloadQueue:
             if (
                 job.state == JobState.QUEUED
                 and job.id not in self._running
+                and job.id not in self._reserved
                 and (best is None or job.order < best.order)
             ):
                 best = job
         return best
 
     def _dispatch_loop(self) -> None:
+        # Nothing may escape this loop: a dead dispatcher silently freezes the whole queue.
         with self._cond:
             while not self._stopping:
-                limit = self._settings.get().max_concurrent
-                while len(self._running) < limit and not self._stopping:
-                    job = self._next_queued()
-                    if job is None:
-                        break
-                    self._start_job(job)
+                try:
+                    limit = self._settings.get().max_concurrent
+                    while len(self._running) < limit and not self._stopping:
+                        job = self._next_queued()
+                        if job is None:
+                            break
+                        try:
+                            self._start_job(job)
+                        except Exception as exc:
+                            log.exception("Could not start job %s", job.id)
+                            self._fail_unstarted(job, exc)
+                except Exception:
+                    log.exception("Dispatcher iteration failed")
                 self._cond.wait(timeout=1.0)
+
+    def _fail_unstarted(self, job: Job, exc: Exception) -> None:
+        """A job whose start failed (e.g. the database is full) fails alone and frees its slot."""
+        running = self._running.get(job.id)
+        if running is not None and running.thread.is_alive():
+            return  # the worker did start; it reports its own outcome
+        self._running.pop(job.id, None)
+        job.state = JobState.FAILED
+        job.error = classify_exception(exc)
+        job.phase = ""
+        job.speed = job.eta = None
+        job.finished_at = time.time()
+        self._batch.failed += 1
+        self._save_quietly([job])
+        self._tracker.job(job.id)
+
+    def _save_quietly(self, jobs: list[Job]) -> bool:
+        """Persist jobs, logging instead of raising: bookkeeping must never kill a thread."""
+        try:
+            self._db.save_jobs(jobs)
+            return True
+        except Exception:
+            log.exception("Could not save %d job(s)", len(jobs))
+            return False
 
     def _start_job(self, job: Job) -> None:
         token = CancelToken()
@@ -313,10 +382,13 @@ class DownloadQueue:
             error = classify_exception(exc)
         if outcome is None and error is None and stop_reason is None:
             error = make_error("unknown", "provider returned no result")
-        if error is not None and ctx.token.stopped:
-            # Errors raised while unwinding a pause/cancel are noise.
-            stop_reason, error = ctx.token.reason, None
-        self._finish_job(job_id, ctx, outcome, error, stop_reason)
+        try:
+            self._finish_job(job_id, ctx, outcome, error, stop_reason)
+        except Exception:
+            log.exception("Finishing job %s failed", job_id)
+            with self._cond:
+                self._running.pop(job_id, None)
+                self._cond.notify_all()
 
     def _finish_job(
         self,
@@ -328,58 +400,76 @@ class DownloadQueue:
     ) -> None:
         cleanup_staging = False
         record_history = False
-        with self._cond:
-            running = self._running.pop(job_id, None)
-            job = self._jobs.get(job_id)
-            if job is None:
-                return
-            job.speed = None
-            job.eta = None
-            if outcome is not None:
-                job.state = JobState.COMPLETED
-                job.filepath = str(outcome.filepath)
-                job.filename = outcome.filepath.name
-                job.file_size = outcome.size
-                job.kind = outcome.kind if outcome.kind != MediaKind.UNKNOWN else job.kind
-                job.sha256 = outcome.sha256
-                job.progress = 1.0
-                job.downloaded_bytes = outcome.size
-                job.total_bytes = outcome.size
-                job.total_is_estimate = False
-                job.phase = ""
-                job.finished_at = time.time()
-                job.file_missing = False
-                cleanup_staging = True
-                record_history = True
-                self._batch.completed += 1
-            elif stop_reason == StopReason.PAUSE:
-                job.state = JobState.PAUSED
-                job.phase = ""
-            elif stop_reason == StopReason.SHUTDOWN:
-                job.state = JobState.INTERRUPTED
-                job.phase = ""
-                job.note = "Interrupted when the app quit — resume to continue."
-            elif stop_reason == StopReason.CANCEL:
-                job.state = JobState.CANCELLED
-                job.phase = ""
-                job.finished_at = time.time()
-                cleanup_staging = True
-                record_history = True
-                self._batch.cancelled += 1
-            else:
-                job.state = JobState.FAILED
-                job.error = error
-                job.phase = ""
-                job.finished_at = time.time()
-                record_history = True
-                self._batch.failed += 1
-            remove = bool(running and running.remove_when_done)
-            self._db.save_jobs([job])
-            collection = self._collections.get(job.collection_id) if job.collection_id else None
-            snapshot = replace(job)
-            self._cond.notify_all()
-        if cleanup_staging:
-            remove_tree(ctx.staging_dir)
+        reserved_here = False  # this call holds a reservation it hasn't handed to _remove_reserved yet
+        try:
+            with self._cond:
+                running = self._running.pop(job_id, None)
+                job = self._jobs.get(job_id)
+                if job is None:
+                    return
+                # Settle the stop reason under the lock: a cancel that lands after the engine
+                # raised (even while a pause was unwinding) has upgraded the token and must win.
+                if ctx.token.stopped and (stop_reason is not None or error is not None):
+                    stop_reason, error = ctx.token.reason, None
+                job.speed = None
+                job.eta = None
+                if outcome is not None:
+                    job.state = JobState.COMPLETED
+                    job.filepath = str(outcome.filepath)
+                    job.filename = outcome.filepath.name
+                    job.file_size = outcome.size
+                    job.kind = outcome.kind if outcome.kind != MediaKind.UNKNOWN else job.kind
+                    job.sha256 = outcome.sha256
+                    job.progress = 1.0
+                    job.downloaded_bytes = outcome.size
+                    job.total_bytes = outcome.size
+                    job.total_is_estimate = False
+                    job.phase = ""
+                    job.finished_at = time.time()
+                    job.file_missing = False
+                    cleanup_staging = True
+                    record_history = True
+                    self._batch.completed += 1
+                elif stop_reason == StopReason.PAUSE:
+                    # A resume that arrived while the pause was unwinding wins.
+                    job.state = JobState.QUEUED if running and running.resume_requested else JobState.PAUSED
+                    job.phase = ""
+                elif stop_reason == StopReason.SHUTDOWN:
+                    job.state = JobState.INTERRUPTED
+                    job.phase = ""
+                    job.note = "Interrupted when the app quit — resume to continue."
+                elif stop_reason == StopReason.CANCEL:
+                    job.state = JobState.CANCELLED
+                    job.phase = ""
+                    job.finished_at = time.time()
+                    cleanup_staging = True
+                    record_history = True
+                    self._batch.cancelled += 1
+                else:
+                    job.state = JobState.FAILED
+                    job.error = error
+                    job.phase = ""
+                    job.finished_at = time.time()
+                    record_history = True
+                    self._batch.failed += 1
+                remove = bool(running and running.remove_when_done)
+                if cleanup_staging:
+                    self._reserve([job_id])  # a retry can't start into a folder being deleted
+                    reserved_here = True
+                # In memory the job is already settled; a failed write is retried by later saves
+                # (every state change and shutdown persist the job again).
+                self._save_quietly([job])
+                collection = self._collections.get(job.collection_id) if job.collection_id else None
+                snapshot = replace(job)
+                self._cond.notify_all()
+            if cleanup_staging:
+                reserved_here = False  # _remove_reserved releases it, even if the delete fails
+                self._remove_reserved([job_id])
+        finally:
+            if reserved_here:
+                with self._cond:
+                    self._release([job_id])
+                    self._cond.notify_all()
         if record_history:
             self._record_history(snapshot, collection)
         if remove:
@@ -389,6 +479,18 @@ class DownloadQueue:
             if collection is not None:
                 self._tracker.collections()
         self._maybe_batch_finished()
+
+    def _reserve(self, job_ids: Iterable[str]) -> None:
+        """Take one hold per id on staging folders (call with the lock held)."""
+        for job_id in job_ids:
+            self._reserved[job_id] += 1
+
+    def _release(self, job_ids: Iterable[str]) -> None:
+        """Drop one hold per id; a job becomes startable once no owner holds it (lock held)."""
+        for job_id in job_ids:
+            self._reserved[job_id] -= 1
+            if self._reserved[job_id] <= 0:
+                del self._reserved[job_id]
 
     def _record_history(self, job: Job, collection: Collection | None) -> None:
         if not self._settings.get().save_history:
@@ -434,6 +536,8 @@ class DownloadQueue:
                 job.progress = max(0.0, min(1.0, job.downloaded_bytes / job.total_bytes))
             if update.phase is not None:
                 job.phase = update.phase
+            if update.downloaded is not None:
+                job.connections = update.connections
         self._tracker.job(job_id)
 
     def _apply_info(self, job_id: str, fields: dict[str, Any]) -> None:
@@ -470,6 +574,7 @@ class DownloadQueue:
                     self._tracker.job(job.id)
                     count += 1
                 elif job.state in ACTIVE_STATES and job.id in self._running:
+                    self._running[job.id].resume_requested = False  # the latest action wins
                     self._running[job.id].token.stop(StopReason.PAUSE)
                     job.phase = "Pausing…"
                     self._tracker.job(job.id)
@@ -488,8 +593,17 @@ class DownloadQueue:
                     self._db.save_jobs([job])
                     self._tracker.job(job.id)
                     count += 1
+                elif job.state in ACTIVE_STATES and self._pausing(job.id):
+                    self._running[job.id].resume_requested = True
+                    job.phase = "Resuming…"
+                    self._tracker.job(job.id)
+                    count += 1
             self._cond.notify_all()
         return count
+
+    def _pausing(self, job_id: str) -> bool:
+        running = self._running.get(job_id)
+        return running is not None and running.token.reason == StopReason.PAUSE
 
     def retry(self, ids: Iterable[str]) -> int:
         count = 0
@@ -522,25 +636,28 @@ class DownloadQueue:
         to_clean: list[str] = []
         finished: list[tuple[Job, Collection | None]] = []
         count = 0
-        with self._cond:
-            for job in self._select(ids):
-                if job.id in self._running:
-                    self._running[job.id].token.stop(StopReason.CANCEL)
-                    job.phase = "Cancelling…"
-                    self._tracker.job(job.id)
-                    count += 1
-                elif job.state in (JobState.QUEUED, JobState.PAUSED, JobState.INTERRUPTED, JobState.FAILED):
-                    job.state = JobState.CANCELLED
-                    job.finished_at = time.time()
-                    job.speed = job.eta = None
-                    self._db.save_jobs([job])
-                    self._tracker.job(job.id)
-                    to_clean.append(job.id)
-                    collection = self._collections.get(job.collection_id) if job.collection_id else None
-                    finished.append((replace(job), collection))
-                    count += 1
-        for job_id in to_clean:
-            remove_tree(self.staging_dir(job_id))
+        try:
+            with self._cond:
+                for job in self._select(ids):
+                    if job.id in self._running:
+                        self._running[job.id].resume_requested = False
+                        self._running[job.id].token.stop(StopReason.CANCEL)
+                        job.phase = "Cancelling…"
+                        self._tracker.job(job.id)
+                        count += 1
+                    elif job.state in (JobState.QUEUED, JobState.PAUSED, JobState.INTERRUPTED, JobState.FAILED):
+                        job.state = JobState.CANCELLED
+                        job.finished_at = time.time()
+                        job.speed = job.eta = None
+                        self._reserve([job.id])  # a retry can't start into a folder being deleted
+                        to_clean.append(job.id)
+                        self._save_quietly([job])
+                        self._tracker.job(job.id)
+                        collection = self._collections.get(job.collection_id) if job.collection_id else None
+                        finished.append((replace(job), collection))
+                        count += 1
+        finally:
+            self._remove_reserved(to_clean)  # deletes and releases only this call's holds
         for snapshot, collection in finished:
             self._record_history(snapshot, collection)
         self._maybe_batch_finished()
@@ -554,6 +671,7 @@ class DownloadQueue:
                 running = self._running.get(job.id)
                 if running is not None:
                     running.remove_when_done = True
+                    running.resume_requested = False
                     running.token.stop(StopReason.CANCEL)
                     continue
                 del self._jobs[job.id]
@@ -572,7 +690,11 @@ class DownloadQueue:
 
     def resume_all(self) -> int:
         with self._lock:
-            ids = [j.id for j in self._jobs.values() if j.state in RESUMABLE_STATES]
+            ids = [
+                j.id
+                for j in self._jobs.values()
+                if j.state in RESUMABLE_STATES or (j.state in ACTIVE_STATES and self._pausing(j.id))
+            ]
         return self.resume(ids)
 
     def retry_failed(self) -> int:
@@ -671,28 +793,70 @@ class DownloadQueue:
 
     def clean_orphan_partials(self) -> int:
         """Delete staging folders that no paused/interrupted/failed job can resume from."""
-        with self._lock:
-            keep = {j.id for j in self._jobs.values() if j.state not in FINISHED_STATES or j.state == JobState.FAILED}
-            keep |= set(self._running)
-        freed = 0
-        if not self._partial_root.exists():
-            return 0
-        for child in self._partial_root.iterdir():
-            if child.name not in keep:
-                freed += remove_tree(child) if child.is_dir() else _unlink_size(child)
-        return freed
+
+        def orphan(name: str) -> bool:
+            job = self._jobs.get(name)
+            return job is None or (job.state in FINISHED_STATES and job.state != JobState.FAILED)
+
+        return self._delete_partials(orphan)
 
     def clean_all_partials(self) -> int:
         """Delete partial data for every job that isn't running (they will restart from zero)."""
-        with self._lock:
-            running = set(self._running)
-        freed = 0
+        return self._delete_partials(lambda name: True)
+
+    def _delete_partials(self, should_delete: Callable[[str], bool]) -> int:
+        """Delete staging folders chosen under the lock; their jobs can't start until it's done.
+
+        The choice and the reservation happen atomically, so a job that is resumed while its
+        folder is being deleted waits instead of starting into a folder that then disappears.
+        Deleting happens outside the lock so a large folder never stalls the queue.
+        """
         if not self._partial_root.exists():
             return 0
-        for child in self._partial_root.iterdir():
-            if child.name in running:
-                continue
-            freed += remove_tree(child) if child.is_dir() else _unlink_size(child)
+        with self._lock:
+            victims = [
+                child
+                for child in self._partial_root.iterdir()
+                if child.name not in self._running and child.name not in self._reserved and should_delete(child.name)
+            ]
+            self._reserve(child.name for child in victims)
+        freed = 0
+        try:
+            for child in victims:
+                freed += remove_tree(child) if child.is_dir() else _unlink_size(child)
+        finally:
+            with self._cond:
+                try:
+                    for child in victims:
+                        job = self._jobs.get(child.name)
+                        # Anything that can still be resumed or retried (including FAILED) loses
+                        # progress and resume state (validators, segment maps) describing bytes
+                        # that no longer exist. Reset before the release so it can't start first.
+                        if (
+                            job is not None
+                            and job.id not in self._running
+                            and job.state not in (JobState.COMPLETED, JobState.CANCELLED)
+                        ):
+                            job.reset_progress()
+                            job.meta.clear()
+                            self._save_quietly([job])
+                            self._tracker.job(job.id)
+                finally:
+                    self._release(child.name for child in victims)
+                    self._cond.notify_all()
+        return freed
+
+    def _remove_reserved(self, job_ids: list[str]) -> int:
+        """Delete staging folders the caller reserved under the lock, then release them."""
+        freed = 0
+        try:
+            for job_id in job_ids:
+                freed += remove_tree(self.staging_dir(job_id))
+        finally:
+            if job_ids:
+                with self._cond:
+                    self._release(job_ids)
+                    self._cond.notify_all()
         return freed
 
 

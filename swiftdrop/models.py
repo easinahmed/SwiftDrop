@@ -140,6 +140,7 @@ class Job:
     note: str | None = None
     file_missing: bool = False
     sha256: str | None = None
+    connections: int | None = None  # open data connections while a multi-connection download runs
     meta: dict[str, Any] = field(default_factory=dict)
 
     # -- serialisation -------------------------------------------------

@@ -4,7 +4,7 @@ import { api, isPreviewMode } from "./lib/api";
 import { pluralize } from "./lib/format";
 import { errorMessage, useStore, type Page } from "./lib/store";
 import { Sidebar, AppMark } from "./components/Sidebar";
-import { Toasts } from "./components/overlay";
+import { OpenConfirmDialog, Toasts } from "./components/overlay";
 import { Button } from "./components/ui";
 import { DownloaderPage } from "./pages/Downloader";
 import { DownloadsPage } from "./pages/Downloads";
@@ -140,6 +140,7 @@ export default function App() {
       </main>
       <ClipboardBanner />
       <Toasts />
+      <OpenConfirmDialog />
     </div>
   );
 }

@@ -53,6 +53,7 @@ interface AppState {
   stats: Stats;
   page: Page;
   toasts: Toast[];
+  openConfirm: { name: string; run: () => void } | null;
   clipboard: PushPayload["clipboard"] | null;
   historyVersion: number;
   options: DownloadOptions;
@@ -64,6 +65,7 @@ interface AppState {
   setPage: (page: Page) => void;
   toast: (kind: Toast["kind"], message: string) => void;
   dismissToast: (id: number) => void;
+  setOpenConfirm: (pending: { name: string; run: () => void } | null) => void;
   addPreview: (items: PreviewItem[]) => void;
   setSelected: (ids: string[], selected: boolean) => void;
   setPlaylistSelection: (id: string, entries: string[] | null) => void;
@@ -103,6 +105,7 @@ export const useStore = create<AppState>((set, get) => ({
   stats: EMPTY_STATS,
   page: "home",
   toasts: [],
+  openConfirm: null,
   clipboard: null,
   historyVersion: 0,
   options: { quality: "best", video_format: "mp4", audio_format: "m4a" },
@@ -206,6 +209,8 @@ export const useStore = create<AppState>((set, get) => ({
     set((s) => ({ toasts: [...s.toasts.slice(-3), { id, kind, message }] }));
     window.setTimeout(() => get().dismissToast(id), kind === "error" ? 8000 : 4500);
   },
+
+  setOpenConfirm: (openConfirm) => set({ openConfirm }),
 
   dismissToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
 

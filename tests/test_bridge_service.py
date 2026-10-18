@@ -11,7 +11,7 @@ import pytest
 from swiftdrop.paths import AppPaths
 from swiftdrop.platform import NullPlatform
 from swiftdrop.service import AppService
-from swiftdrop.ui.bridge import Bridge
+from swiftdrop.ui.bridge import Bridge, bundled_index_url
 from tests.conftest import make_bytes, wait_for
 
 EXPECTED_FUNCTIONS = {
@@ -48,6 +48,11 @@ EXPECTED_FUNCTIONS = {
 }
 
 
+class _IndexWindow:
+    def get_current_url(self):
+        return bundled_index_url()
+
+
 @pytest.fixture
 def service(tmp_path):
     paths = AppPaths(data_dir=tmp_path / "data", logs_dir=tmp_path / "logs", partial_dir=tmp_path / "partial")
@@ -63,7 +68,7 @@ def service(tmp_path):
 @pytest.fixture
 def api(service):
     bridge = Bridge(service)
-    return {fn.__name__: fn for fn in bridge.functions()}, bridge
+    return {fn.__name__: fn for fn in bridge.functions(_IndexWindow())}, bridge
 
 
 def test_exposed_surface_is_an_exact_allow_list(api):
@@ -203,3 +208,70 @@ def test_clipboard_detection_only_offers_new_links(service):
     assert changes.clipboard["urls"] == ["https://example.com/new.mp4"]
     service.clipboard_detected("just text, no links")
     assert service.tracker.drain().clipboard is None
+
+
+def test_open_job_executable_needs_confirmation(api, service, tmp_path):
+    functions, _ = api
+    script = tmp_path / "Downloads" / "x.command"
+    script.write_text("echo hi")
+    service.job_file = lambda job_id: script  # type: ignore[method-assign]
+    result = functions["open_job"]("0123456789abcdef")
+    assert result == {"ok": False, "error": "confirm_open", "name": "x.command"}
+    assert service.platform.opened == []
+    assert functions["open_job"]("0123456789abcdef", True) == {"ok": True, "data": True}
+    assert service.platform.opened == [script]
+
+
+def _download_direct(service, url):
+    service.settings.update({"auto_inspect": False})  # a background inspect request would blur peak_active
+    (item,) = service.analyze_text(url)["added"]
+    return service.start_downloads([{"id": item["id"], "entries": None}], None, None)["job_ids"][0]
+
+
+def _finished(service, job_id):
+    return wait_for(lambda: service.queue.get(job_id).state.value in ("completed", "failed"), timeout=30)
+
+
+def test_direct_large_file_uses_segmented(service, http_server):
+    data = make_bytes(20 * 1024 * 1024)
+    url = http_server.add_file("large.bin", data) + "?rate=2000000"
+    job_id = _download_direct(service, url)
+    assert wait_for(
+        lambda: any(j["connections"] == 4 for j in service.queue.jobs_public([job_id])), timeout=15
+    ), "no 4-connection progress seen"
+    assert _finished(service, job_id)
+    job = service.queue.get(job_id)
+    assert job.state.value == "completed", job.error
+    assert Path(job.filepath).read_bytes() == data
+    assert http_server.peak_active >= 2
+
+
+def test_direct_small_file_uses_single_connection(service, http_server):
+    data = make_bytes(1024 * 1024)
+    job_id = _download_direct(service, http_server.add_file("small.bin", data))
+    assert _finished(service, job_id)
+    job = service.queue.get(job_id)
+    assert job.state.value == "completed", job.error
+    assert Path(job.filepath).read_bytes() == data
+    assert http_server.peak_active == 1
+
+
+def test_segmented_unavailable_falls_back_and_completes(service, http_server):
+    data = make_bytes(8 * 1024 * 1024)
+    job_id = _download_direct(service, http_server.add_file("fallback.bin", data) + "?range_after=1")
+    assert _finished(service, job_id)
+    job = service.queue.get(job_id)
+    assert job.state.value == "completed", job.error
+    assert Path(job.filepath).read_bytes() == data
+
+
+def test_connections_setting_change_applies_to_new_jobs(service, http_server):
+    def connections(job_id):
+        return service.queue.jobs_public([job_id])[0]["connections"]
+
+    first = _download_direct(service, http_server.add_file("one.bin", make_bytes(24 * 1024 * 1024)) + "?rate=1000000")
+    assert wait_for(lambda: connections(first) == 4, timeout=15)
+    service.update_settings({"connections_per_download": 2})
+    second = _download_direct(service, http_server.add_file("two.bin", make_bytes(24 * 1024 * 1024)) + "?rate=1000000")
+    assert wait_for(lambda: connections(second) == 2, timeout=15)
+    assert connections(first) == 4  # the running job keeps what it started with

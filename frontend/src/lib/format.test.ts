@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { countLinks, folderName, formatBytes, formatDuration, formatEta, formatSpeed, shortPath } from "./format";
+import { countLinks, folderName, formatBytes, formatConnections, formatDuration, formatEta, formatSpeed, shortPath } from "./format";
 
 describe("format helpers", () => {
   it("formats bytes with decimal units like Finder", () => {
@@ -7,6 +7,12 @@ describe("format helpers", () => {
     expect(formatBytes(1_500_000)).toBe("1.5 MB");
     expect(formatBytes(30_000_000)).toBe("30.0 MB");
     expect(formatBytes(null)).toBe("—");
+  });
+
+  it("describes the connection count only when it is known", () => {
+    expect(formatConnections(4)).toBe("4 connections");
+    expect(formatConnections(1)).toBe("1 connection");
+    expect(formatConnections(null)).toBe("");
   });
 
   it("never shows a speed or ETA it cannot know", () => {

@@ -29,6 +29,16 @@ def _ensure_std_streams() -> None:
         sys.stderr = open(os.devnull, "w")  # noqa: SIM115
 
 
+def _activate_running_instance() -> None:
+    try:
+        from AppKit import NSApplicationActivateAllWindows, NSRunningApplication
+    except ImportError:
+        return
+    apps = NSRunningApplication.runningApplicationsWithBundleIdentifier_("com.swiftdrop.SwiftDrop")
+    if apps:
+        apps[0].activateWithOptions_(NSApplicationActivateAllWindows)
+
+
 def main(argv: list[str] | None = None) -> int:
     _ensure_std_streams()
     args = _parse(sys.argv[1:] if argv is None else argv)
@@ -40,6 +50,14 @@ def main(argv: list[str] | None = None) -> int:
     paths = default_paths().ensure()
     configure_logging(paths.logs_dir, verbose=args.debug)
     log = get_logger("app")
+
+    from swiftdrop.instance import acquire_instance_lock
+
+    instance_lock = acquire_instance_lock(paths.data_dir)
+    if instance_lock is None:
+        log.info("SwiftDrop is already running")
+        _activate_running_instance()
+        return 0
 
     from swiftdrop.platform.macos import MacPlatform
     from swiftdrop.service import AppService
@@ -54,6 +72,7 @@ def main(argv: list[str] | None = None) -> int:
         raise
     finally:
         service.shutdown()
+        instance_lock.release()
     return 0
 
 

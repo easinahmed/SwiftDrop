@@ -200,3 +200,16 @@ def test_probe_reads_headers_without_body(http_server):
     assert probe.accept_ranges is True
     assert "Nice Name.mp4" in (probe.content_disposition or "")
     assert not probe.is_html
+
+
+def test_resume_rejects_html_page(tmp_path, http_server):
+    """An expired link that answers a resume with an HTML page must not replace the partial file."""
+    part = tmp_path / "x.part"
+    part.write_bytes(b"\x00" * 500_000)
+    state = {"accept_ranges": True, "etag": '"v1"'}
+    http_server.add_file("x.mp4", b"<html>expired</html>")
+    url = http_server.url("/file/x.mp4?type=text/html&norange=1")
+    with pytest.raises(DownloadFailure) as info:
+        fast_downloader().download(url, part, CancelToken(), lambda u: None, state)
+    assert info.value.info.code == "not_media"
+    assert part.stat().st_size == 500_000

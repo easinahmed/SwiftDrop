@@ -162,10 +162,10 @@ export function SettingsPage() {
                 label="Default video format"
                 value={settings.default_video_format}
                 onChange={(v) => update({ default_video_format: v })}
-                className="w-[170px]"
+                className="w-[260px]"
                 options={[
-                  { value: "mp4", label: "MP4" },
-                  { value: "mkv", label: "MKV" },
+                  { value: "mp4", label: "MP4 (plays in QuickTime)" },
+                  { value: "mkv", label: "Original quality (MKV, may need VLC)" },
                   { value: "webm", label: "WebM" },
                   { value: "auto", label: "Original" },
                 ]}
@@ -201,6 +201,18 @@ export function SettingsPage() {
                 className="w-[160px] accent-[var(--accent)]"
               />
               <span className="w-5 text-right text-[13px] font-semibold tabular-nums">{settings.max_concurrent}</span>
+            </Row>
+            <Row label="Connections per download" description="More connections can be faster; servers that limit connections are handled automatically.">
+              <input
+                type="range"
+                min={1}
+                max={16}
+                value={settings.connections_per_download}
+                aria-label="Connections per download"
+                onChange={(e) => update({ connections_per_download: Number(e.target.value) })}
+                className="w-[160px] accent-[var(--accent)]"
+              />
+              <span className="w-5 text-right text-[13px] font-semibold tabular-nums">{settings.connections_per_download}</span>
             </Row>
             <Row label="Bandwidth limit" description="Shared by all downloads. Leave empty for unlimited.">
               <BandwidthInput key={settings.bandwidth_limit_kbps} value={settings.bandwidth_limit_kbps} onCommit={(kbps) => update({ bandwidth_limit_kbps: kbps })} />

@@ -1,6 +1,7 @@
 import errno
 import logging
 
+import pytest
 import requests
 
 from swiftdrop.errors import classify_exception, classify_http_status, classify_message
@@ -68,3 +69,64 @@ def test_exception_classification():
     assert classify_exception(requests.ReadTimeout("slow")).code == "timeout"
     detail = classify_exception(requests.ConnectionError("https://e.com/?token=SECRET")).detail
     assert "SECRET" not in detail
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "https://cdn.example.com/v.mp4?x-signature=SECRETV",
+        "https://scontent.fbcdn.net/v.mp4?a=1&oh=SECRETV",
+        "https://scontent.fbcdn.net/v.mp4?a=1&_nc_ohc=SECRETV",
+        "https://api.example.com/x?jwt=SECRETV",
+        "https://cdn.example.com/x?hash=SECRETV",
+        "https://cdn.example.com/x?auth_key=SECRETV",
+        "https://example.com/callback?code=SECRETV",
+        "https://example.com/callback#access_token=SECRETV",
+        "https://example.com/redirect?next=https%3A%2F%2Fcdn.example.com%2Fv%3Fsig%3DSECRETV",
+        "{'Cookie': 'SID=SECRETV'}",
+        '{"Authorization": "token SECRETV"}',
+        '{"X-Api-Key": "SECRETV"}',
+        str({"cookie": "a=SECRETV; b=SECRETV"}),
+    ],
+)
+def test_redacts_additional_secrets(text):
+    out = redact(text)
+    assert "REDACTED" in out
+    assert "SECRETV" not in out
+
+
+def test_redacts_json_cookie_with_escaped_quotes():
+    import json
+
+    text = json.dumps({"Cookie": 'session="SECRETV"; b=SECRETV2', "Accept": "text/html"})
+    out = redact(text)
+    assert "SECRETV" not in out
+    assert "text/html" in out  # other keys untouched
+
+
+def test_redact_header_dict_no_catastrophic_backtracking():
+    """An unclosed quoted header value full of backslashes must not freeze logging."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    probe = (
+        "import time\n"
+        "from swiftdrop.redact import redact\n"
+        "t = time.perf_counter()\n"
+        "redact('\"Cookie\": \"' + '\\\\' * 5000)\n"
+        "print(time.perf_counter() - t)\n"
+    )
+    root = Path(__file__).resolve().parent.parent
+    try:
+        out = subprocess.run(
+            [sys.executable, "-c", probe], capture_output=True, text=True, timeout=10, check=True, cwd=root
+        )
+    except subprocess.TimeoutExpired:
+        raise AssertionError("redact() took more than 10 s on 5000 backslashes (catastrophic backtracking)")
+    assert float(out.stdout.strip()) < 0.5
+    # escaped quotes inside a value still end up fully redacted
+    import json
+
+    assert "SECRETV" not in redact(json.dumps({"Cookie": 'session="SECRETV"; b=SECRETV2'}))
+    assert "SECRETV" not in redact("{'Cookie': 'a\\'SECRETV'}")

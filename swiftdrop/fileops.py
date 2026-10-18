@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import threading
 from pathlib import Path
 
-from swiftdrop.filenames import sanitize_filename, split_ext
+from swiftdrop.filenames import _truncate_utf8, sanitize_filename, split_ext
 from swiftdrop.logging_setup import get_logger
 
 log = get_logger("fileops")
+NAME_LIMIT_BYTES = 255  # APFS / HFS+ / exFAT file name limit
 _reserve_lock = threading.Lock()
 
 
@@ -38,18 +40,34 @@ def reserve_unique_path(directory: Path, filename: str) -> Path:
     raise FileExistsError(f"No free filename for {filename} in {directory}")
 
 
+def _same_volume(a: Path, b: Path) -> bool:
+    return a.stat().st_dev == b.stat().st_dev
+
+
+def _copy_temp_path(target: Path) -> Path:
+    """Hidden temp name next to ``target`` that never exceeds the 255-byte name limit."""
+    suffix = ".sdcopy"
+    stem = _truncate_utf8(target.name, NAME_LIMIT_BYTES - 1 - len(suffix))
+    return target.with_name(f".{stem}{suffix}")
+
+
 def move_into_place(source: Path, reserved_target: Path) -> Path:
     """Move ``source`` onto the placeholder created by :func:`reserve_unique_path`."""
+    temp: Path | None = None
     try:
-        if source.stat().st_dev == reserved_target.parent.stat().st_dev:
+        if _same_volume(source, reserved_target.parent):
             os.replace(source, reserved_target)
         else:
             # Different volume: copy next to the target, then atomically swap it in.
-            temp = reserved_target.with_name(f".{reserved_target.name}.swiftdrop-copy")
+            temp = _copy_temp_path(reserved_target)
             shutil.copy2(source, temp)
             os.replace(temp, reserved_target)
+            temp = None
             source.unlink(missing_ok=True)
     except BaseException:
+        if temp is not None:
+            with contextlib.suppress(OSError):
+                temp.unlink(missing_ok=True)
         try:
             if reserved_target.exists() and reserved_target.stat().st_size == 0:
                 reserved_target.unlink()
