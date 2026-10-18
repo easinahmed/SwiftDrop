@@ -23,3 +23,7 @@ packaging/generated/
 
 # macOS
 .DS_Store
+
+# Local worktrees and tool folders
+.worktrees/
+.superpowers/
