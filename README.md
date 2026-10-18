@@ -1,5 +1,7 @@
 # SwiftDrop
 
+_Developed by Easin Codes_
+
 A fast, reliable media downloader for macOS. Paste one link or hundreds. SwiftDrop works out what each
 link is, shows you a preview, and downloads everything locally: with live progress, pause/resume,
 retries, playlists and a clean native-feeling interface.

@@ -71,7 +71,7 @@ function ClipboardBanner() {
 
 function Splash({ error }: { error?: string | null }) {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-4 text-center">
+    <div className="relative flex h-full flex-col items-center justify-center gap-4 text-center">
       <AppMark size={52} />
       {error ? (
         <>
@@ -83,6 +83,7 @@ function Splash({ error }: { error?: string | null }) {
       ) : (
         <Loader2 className="size-5 animate-spin text-ink-3" aria-label="Loading" />
       )}
+      <p className="absolute bottom-6 text-[11px] text-ink-3">Developed by Easin Codes</p>
     </div>
   );
 }

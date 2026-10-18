@@ -124,9 +124,11 @@ export function Sidebar() {
             </div>
             {speed && <div className="mt-0.5 text-[11.5px] tabular-nums text-ink-3">{speed}</div>}
           </div>
-        ) : (
-          <div className="text-[11px] text-ink-3">v{app?.version ?? "1.0.0"}</div>
-        )}
+        ) : null}
+        <div className="border-t border-line pt-2.5 leading-tight">
+          <div className="text-[11px] font-medium text-ink-2">Developed by Easin Codes</div>
+          <div className="mt-0.5 text-[10.5px] text-ink-3">v{app?.version}</div>
+        </div>
       </div>
     </aside>
   );

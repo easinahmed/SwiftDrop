@@ -8,7 +8,7 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 ROOT = Path(SPECPATH).parent  # noqa: F821 - provided by PyInstaller
 sys.path.insert(0, str(ROOT))
-from swiftdrop.appinfo import APP_NAME, APP_VERSION, BUNDLE_ID  # noqa: E402
+from swiftdrop.appinfo import APP_CREDIT, APP_NAME, APP_VERSION, BUNDLE_ID  # noqa: E402
 
 ARCH = os.environ.get("SWIFTDROP_ARCH", "arm64")
 IDENTITY = os.environ.get("SWIFTDROP_CODESIGN_IDENTITY") or None
@@ -92,7 +92,7 @@ app = BUNDLE(  # noqa: F821
         "LSApplicationCategoryType": "public.app-category.utilities",
         "NSHighResolutionCapable": True,
         "NSRequiresAquaSystemAppearance": False,
-        "NSHumanReadableCopyright": f"{APP_NAME} {APP_VERSION}",
+        "NSHumanReadableCopyright": f"{APP_NAME} {APP_VERSION}. {APP_CREDIT}.",
         # Thumbnails from plain-http sites are shown inside the web view.
         "NSAppTransportSecurity": {"NSAllowsArbitraryLoadsInWebContent": True},
     },
