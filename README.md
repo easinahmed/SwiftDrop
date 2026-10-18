@@ -23,7 +23,8 @@ retries, playlists and a clean native-feeling interface.
 
 ## Install
 
-1. Open `SwiftDrop-1.0.0-arm64.dmg` and drag **SwiftDrop** to **Applications**.
+1. Download `SwiftDrop-<version>-arm64.dmg` from the [Releases](../../releases) page, open it and drag
+   **SwiftDrop** to **Applications**.
 2. The development build is **not signed with an Apple Developer ID** (see [Signing](#signing--notarization)).
    On first launch, right-click SwiftDrop in Applications → **Open** → **Open**. Alternatively, run:
    ```sh
