@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Remote content is never loaded as script. 'unsafe-eval' is required by the
+         pywebview bridge, which evaluates its own return-value callbacks. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: http:; connect-src 'self' ws://localhost:5199 http://localhost:5199; font-src 'self' data:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'"
+    />
+    <link rel="icon" href="data:," />
+    <title>SwiftDrop</title>
+    <script type="module" crossorigin src="./assets/index-CBg7ZL0V.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-DuT-EHnT.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

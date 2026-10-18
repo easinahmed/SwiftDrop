@@ -1,0 +1,236 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* Design tokens. Components use these through Tailwind (bg-surface, text-ink-2 …). */
+:root {
+  --bg: #f4f4f6;
+  --sidebar: #ececf0;
+  --sidebar-hover: rgb(0 0 0 / 0.045);
+  --sidebar-active: rgb(0 0 0 / 0.075);
+  --surface: #ffffff;
+  --surface-2: #f7f7f9;
+  --surface-3: #efeff3;
+  --line: rgb(0 0 0 / 0.08);
+  --line-strong: rgb(0 0 0 / 0.14);
+  --ink: #1d1d1f;
+  --ink-2: #5d5d63;
+  --ink-3: #8b8b92;
+  --accent: #2f6df6;
+  --accent-2: #6a4ff0;
+  --accent-soft: rgb(47 109 246 / 0.1);
+  --accent-ink: #1f57d6;
+  --success: #24a148;
+  --success-soft: rgb(36 161 72 / 0.11);
+  --warning: #c77700;
+  --warning-soft: rgb(255 159 10 / 0.14);
+  --danger: #e0362c;
+  --danger-soft: rgb(224 54 44 / 0.1);
+  --track: rgb(0 0 0 / 0.07);
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.04), 0 2px 8px rgb(0 0 0 / 0.04);
+  --shadow-pop: 0 10px 30px rgb(0 0 0 / 0.14), 0 2px 6px rgb(0 0 0 / 0.08);
+  --focus: rgb(47 109 246 / 0.45);
+  color-scheme: light;
+}
+
+[data-theme="dark"] {
+  --bg: #161618;
+  --sidebar: #1c1c1f;
+  --sidebar-hover: rgb(255 255 255 / 0.05);
+  --sidebar-active: rgb(255 255 255 / 0.09);
+  --surface: #222226;
+  --surface-2: #28282c;
+  --surface-3: #303035;
+  --line: rgb(255 255 255 / 0.075);
+  --line-strong: rgb(255 255 255 / 0.14);
+  --ink: #f2f2f5;
+  --ink-2: #a9a9b0;
+  --ink-3: #75757d;
+  --accent: #3d82ff;
+  --accent-2: #7b62ff;
+  --accent-soft: rgb(61 130 255 / 0.16);
+  --accent-ink: #7fb0ff;
+  --success: #3ccf6e;
+  --success-soft: rgb(60 207 110 / 0.14);
+  --warning: #ffb340;
+  --warning-soft: rgb(255 179 64 / 0.14);
+  --danger: #ff6159;
+  --danger-soft: rgb(255 97 89 / 0.14);
+  --track: rgb(255 255 255 / 0.09);
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.3), 0 2px 10px rgb(0 0 0 / 0.18);
+  --shadow-pop: 0 14px 40px rgb(0 0 0 / 0.5), 0 2px 8px rgb(0 0 0 / 0.35);
+  --focus: rgb(61 130 255 / 0.55);
+  color-scheme: dark;
+}
+
+@theme inline {
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --color-bg: var(--bg);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-hover: var(--sidebar-hover);
+  --color-sidebar-active: var(--sidebar-active);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-accent: var(--accent);
+  --color-accent-2: var(--accent-2);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-ink: var(--accent-ink);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-track: var(--track);
+  --shadow-card: var(--shadow-card);
+  --shadow-pop: var(--shadow-pop);
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    -webkit-user-select: none;
+    user-select: none;
+    cursor: default;
+    overflow: hidden;
+    transition: background-color 200ms ease;
+  }
+  input,
+  textarea,
+  select,
+  .selectable {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+  button {
+    cursor: default;
+  }
+  :focus-visible {
+    outline: 3px solid var(--focus);
+    outline-offset: 1px;
+    border-radius: 7px;
+  }
+  ::selection {
+    background: var(--accent-soft);
+  }
+  ::-webkit-scrollbar {
+    width: 11px;
+    height: 11px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--line-strong);
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+@layer components {
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    box-shadow: var(--shadow-card);
+  }
+  .row-cv {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 76px;
+  }
+  .gradient-accent {
+    background-image: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
+  }
+  .text-gradient {
+    background-image: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+}
+
+/* Entrance animations only move content; they never hide it. WebKit pauses animations in
+   occluded windows, and an opacity fade would leave content invisible until the window is shown. */
+@keyframes sd-fade-in {
+  from {
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes sd-pop {
+  from {
+    transform: scale(0.97) translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes sd-shimmer {
+  0% {
+    background-position: -200px 0;
+  }
+  100% {
+    background-position: calc(200px + 100%) 0;
+  }
+}
+@keyframes sd-indeterminate {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(250%);
+  }
+}
+.animate-fade-in {
+  animation: sd-fade-in 220ms ease-out both;
+}
+.animate-pop {
+  animation: sd-pop 200ms cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+}
+.skeleton {
+  background: linear-gradient(90deg, var(--surface-3) 0px, var(--surface-2) 60px, var(--surface-3) 120px);
+  background-size: 200px 100%;
+  animation: sd-shimmer 1.2s linear infinite;
+}
+.indeterminate::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  animation: sd-indeterminate 1.3s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

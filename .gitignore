@@ -1,0 +1,25 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Build output
+build/
+dist/
+
+# Helper binaries are provisioned by scripts/fetch_binaries.py, never committed
+vendor/bin/
+
+# Frontend
+frontend/node_modules/
+frontend/.vite/
+
+# Generated packaging assets
+packaging/generated/
+
+# macOS
+.DS_Store
