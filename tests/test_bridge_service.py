@@ -45,6 +45,9 @@ EXPECTED_FUNCTIONS = {
     "open_logs_folder",
     "open_partial_folder",
     "open_download_folder",
+    "get_capture",
+    "decide_capture",
+    "quit_app",
 }
 
 
@@ -136,6 +139,50 @@ def test_destination_must_come_from_folder_picker(api, service, tmp_path):
     assert accepted["ok"] is True and accepted["data"]["download_dir"] == str(outside.resolve())
 
 
+class _FakeConfirmUI:
+    def __init__(self) -> None:
+        self.opened: list[str] = []
+
+    def open(self, capture_id):
+        self.opened.append(capture_id)
+
+    def close(self, capture_id):
+        pass
+
+
+def test_capture_endpoints_check_the_folder(api, service, http_server, tmp_path):
+    functions, bridge = api
+    assert functions["get_capture"]("0123456789abcdef")["ok"] is False
+    assert functions["quit_app"]()["ok"] is False  # no window to quit from
+    ui = _FakeConfirmUI()
+    service.capture.attach_ui(ui)
+    service.handle_message({"type": "add", "url": http_server.add_file("cap.zip", make_bytes(10))})
+    assert wait_for(lambda: ui.opened, timeout=5)
+    (capture_id,) = ui.opened
+    got = functions["get_capture"](capture_id)
+    assert got["ok"] is True and got["data"]["filename"] == "cap.zip"
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    refused = functions["decide_capture"](capture_id, "start", "cap.zip", str(outside))
+    assert refused["ok"] is False and "folder picker" in refused["error"]
+    assert functions["decide_capture"](capture_id, "explode", "x", "")["ok"] is False
+    bridge.approve_dir(str(outside))
+    done = functions["decide_capture"](capture_id, "later", "cap.zip", str(outside))
+    assert done["ok"] is True and done["data"]["decision"] == "later"
+    assert service.queue.get(done["data"]["job_id"]).destination == str(outside.resolve())
+    assert functions["get_capture"](capture_id)["ok"] is False
+    quits = []
+    bridge.set_quit_handler(lambda: quits.append(True))
+    assert functions["quit_app"]() == {"ok": True, "data": True} and quits == [True]
+
+
+def test_navigate_is_pushed(api, service):
+    _, bridge = api
+    service.tracker.drain()
+    service.tracker.navigate("home")
+    assert bridge.build_push()["navigate"] == "home"
+
+
 def test_reveal_only_uses_recorded_paths(api, service, http_server):
     functions, _ = api
     url = http_server.add_file("clip.mp4", make_bytes(20_000))
@@ -201,6 +248,7 @@ def test_batch_notification(service, http_server):
 
 
 def test_clipboard_detection_only_offers_new_links(service):
+    service.settings.update({"clipboard_monitoring": True})
     service.analyze_text("https://example.com/known.mp4")
     service.tracker.drain()
     service.clipboard_detected("password123 and https://example.com/known.mp4 and https://example.com/new.mp4")

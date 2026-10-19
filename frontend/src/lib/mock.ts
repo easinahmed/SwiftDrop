@@ -39,6 +39,16 @@ const settings: Settings = {
   save_history: true,
   cookies_from_browser: "",
   verbose_logging: false,
+  clipboard_popup: true,
+  popup_notice_seen: false,
+};
+
+const capabilities = {
+  sites: true,
+  ffmpeg: true,
+  login_item: false,
+  js_runtime: "node",
+  platform: "mac" as const,
 };
 
 let counter = 0;
@@ -207,9 +217,9 @@ const handlers: Record<string, (...args: never[]) => unknown> = {
     collections: [],
     preview: [...preview.values()],
     stats: stats(),
-    capabilities: { sites: true, ffmpeg: true, login_item: false, js_runtime: "node" },
+    capabilities,
   }),
-  get_state: () => ({ settings, jobs: [...jobs.values()], collections: [...collections.values()].map(withStats), preview: [...preview.values()], stats: stats(), capabilities: { sites: true, ffmpeg: true, login_item: false, js_runtime: "node" } }),
+  get_state: () => ({ settings, jobs: [...jobs.values()], collections: [...collections.values()].map(withStats), preview: [...preview.values()], stats: stats(), capabilities }),
   analyze_text: (text: string) => {
     const urls = Array.from(new Set(text.match(/https?:\/\/[^\s]+/g) ?? []));
     const added = urls.map(classify);
@@ -306,6 +316,35 @@ const handlers: Record<string, (...args: never[]) => unknown> = {
   open_logs_folder: () => true,
   open_partial_folder: () => true,
   open_download_folder: () => true,
+  get_capture: (captureId: string) => {
+    // Preview the three window variants with #/capture/<id>: …file, …page or …links.
+    const kind = captureId.endsWith("page") ? "page" : captureId.endsWith("links") ? "links" : "file";
+    const urls =
+      kind === "links"
+        ? ["https://downloads.example.com/a.zip", "https://cdn.example.org/b.mp4", "https://example.net/c.pdf"]
+        : kind === "page"
+          ? ["https://www.youtube.com/watch?v=dQw4w9WgXcQ"]
+          : ["https://downloads.example.com/releases/Example-Installer-4.2.dmg"];
+    return {
+      id: captureId,
+      kind,
+      origin: "clipboard",
+      url: urls[0],
+      urls,
+      count: urls.length,
+      sites: [...new Set(urls.map((u) => new URL(u).hostname.replace(/^www\./, "")))],
+      source: new URL(urls[0]).hostname.replace(/^www\./, ""),
+      label: kind === "page" ? "YouTube" : "",
+      filename: kind === "file" ? "Example-Installer-4.2.dmg" : "",
+      size: kind === "file" ? 148_300_000 : null,
+      media: kind === "page" ? "video" : "other",
+      folder: settings.download_dir,
+      theme: settings.theme,
+      quality_label: "Best · MP4",
+    };
+  },
+  decide_capture: (_id: string, decision: string) => ({ decision, job_id: null }),
+  quit_app: () => true,
 };
 
 export function createMockBridge() {

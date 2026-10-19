@@ -118,6 +118,15 @@ class MacPlatform:
     def _change_count(self) -> int:
         return int(run_on_main(lambda: AppKit.NSPasteboard.generalPasteboard().changeCount()))
 
+    def _app_in_front(self) -> bool:
+        """True while SwiftDrop is the active app (copies made in the app)."""
+
+        def active() -> bool:
+            app = AppKit.NSApp()
+            return bool(app is not None and app.isActive())
+
+        return bool(run_on_main(active))
+
     def start_clipboard_monitor(self, callback: Callable[[str], None]) -> None:
         if self._monitor_thread and self._monitor_thread.is_alive():
             return
@@ -134,6 +143,8 @@ class MacPlatform:
                     if count == last:
                         continue
                     last = count
+                    if self._app_in_front():
+                        continue  # copied inside SwiftDrop (Copy link, ⌘C): never offer it back
                     text = self.read_clipboard()
                 except Exception:
                     log.debug("Clipboard poll failed", exc_info=True)

@@ -43,6 +43,13 @@ class Settings:
     save_history: bool = True
     cookies_from_browser: str = ""
     verbose_logging: bool = False
+    clipboard_popup: bool = True  # pop up a confirm window for copied download links
+    popup_notice_seen: bool = False
+
+    @property
+    def watch_clipboard(self) -> bool:
+        """The clipboard watcher runs for the pop-up and/or the in-app banner."""
+        return self.clipboard_popup or self.clipboard_monitoring
 
     def default_options(self) -> DownloadOptions:
         return DownloadOptions(
@@ -121,6 +128,8 @@ _VALIDATORS: dict[str, Callable[[Any], Any]] = {
     "save_history": lambda v: _bool("Save history", v),
     "cookies_from_browser": lambda v: _choice("Browser sign-in", v, COOKIE_BROWSERS),
     "verbose_logging": lambda v: _bool("Detailed logs", v),
+    "clipboard_popup": lambda v: _bool("Pop up when I copy a download link", v),
+    "popup_notice_seen": lambda v: _bool("Pop-up notice seen", v),
 }
 assert set(_VALIDATORS) == {f.name for f in fields(Settings)}
 

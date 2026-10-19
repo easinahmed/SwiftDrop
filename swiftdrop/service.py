@@ -20,10 +20,12 @@ from typing import Any
 
 from swiftdrop import binaries
 from swiftdrop.appinfo import APP_NAME, APP_VERSION, BUNDLE_ID
+from swiftdrop.capture import CaptureManager
 from swiftdrop.engine.connpool import GLOBAL_POOL
 from swiftdrop.engine.http import HttpDownloader
 from swiftdrop.engine.segmented import SegmentedDownloader
 from swiftdrop.events import ChangeTracker
+from swiftdrop.handoff import InboxWatcher
 from swiftdrop.history import HISTORY_KINDS, HISTORY_STATUSES, HistoryStore
 from swiftdrop.logging_setup import get_logger, set_verbose
 from swiftdrop.models import Collection, DownloadOptions, Job, JobState, MediaKind
@@ -37,9 +39,11 @@ from swiftdrop.queue import BatchSummary, DownloadQueue
 from swiftdrop.ratelimit import TokenBucket
 from swiftdrop.settings import SettingsError, SettingsStore, validate_directory, validate_patch
 from swiftdrop.storage import Database
-from swiftdrop.urls import InvalidUrlError, dedupe_key, display_domain, normalize_url, parse_url_list
+from swiftdrop.urls import InvalidUrlError, ParsedUrl, dedupe_key, display_domain, normalize_url, parse_url_list
 
 log = get_logger("service")
+
+MAX_SITE_CHECKS = 10  # full yt-dlp site matching is slow; only for copies with a few unknown links
 
 
 class ServiceError(ValueError):
@@ -59,7 +63,14 @@ def _build_site_matcher(bucket: TokenBucket) -> SiteMatcher | None:
 
 
 class AppService:
-    def __init__(self, paths: AppPaths, platform: Platform | None = None, *, enable_sites: bool = True) -> None:
+    def __init__(
+        self,
+        paths: AppPaths,
+        platform: Platform | None = None,
+        *,
+        enable_sites: bool = True,
+        inbox: bool = False,
+    ) -> None:
         self.paths = paths.ensure()
         self.platform: Platform = platform or NullPlatform()
         self.db = Database(paths.database)
@@ -91,6 +102,10 @@ class AppService:
             active_keys=self.queue.active_keys,
         )
         self._clipboard_seen: set[str] = set()
+        self._popup_seen: set[str] = set()  # links already offered in a pop-up this session
+        self.capture = CaptureManager(self)
+        # Requests from later launches of the app (show the window, a swiftdrop:// link).
+        self._inbox = InboxWatcher(paths.data_dir, self.handle_message) if inbox else None
         self._started = False
         self._shutdown_lock = threading.Lock()
         self._shut_down = False
@@ -107,8 +122,10 @@ class AppService:
         warm_up = getattr(self.registry.sites, "warm_up", None)
         if warm_up is not None:
             threading.Thread(target=warm_up, name="sites-warm-up", daemon=True).start()
-        if self.settings.get().clipboard_monitoring:
+        if self.settings.get().watch_clipboard:
             self.platform.start_clipboard_monitor(self.clipboard_detected)
+        if self._inbox is not None:
+            self._inbox.start()
         log.info("%s %s started (frozen=%s)", APP_NAME, APP_VERSION, is_frozen())
 
     def shutdown(self) -> None:
@@ -119,6 +136,9 @@ class AppService:
             self._shut_down = True
         log.info("Shutting down")
         try:
+            if self._inbox is not None:
+                self._inbox.stop()
+            self.capture.shutdown()
             self.platform.stop_clipboard_monitor()
             self.preview.stop()
             self.queue.shutdown()
@@ -148,6 +168,7 @@ class AppService:
             "ffmpeg": bool(ffmpeg),
             "login_item": self.platform.login_item_supported(),
             "js_runtime": js.name if js else None,
+            "platform": "windows" if sys.platform == "win32" else "mac",
         }
 
     # -- preview ------------------------------------------------------------
@@ -412,9 +433,10 @@ class AppService:
             self.bucket.set_rate(after.bandwidth_bytes_per_sec)
         if after.max_concurrent != before.max_concurrent:
             self.queue.notify_settings_changed()
-        if after.clipboard_monitoring != before.clipboard_monitoring:
-            if after.clipboard_monitoring:
-                self._clipboard_seen = set()
+        if after.clipboard_monitoring and not before.clipboard_monitoring:
+            self._clipboard_seen = set()
+        if after.watch_clipboard != before.watch_clipboard:
+            if after.watch_clipboard:
                 self.platform.start_clipboard_monitor(self.clipboard_detected)
             else:
                 self.platform.stop_clipboard_monitor()
@@ -427,20 +449,66 @@ class AppService:
 
     # -- clipboard ----------------------------------------------------------------
     def clipboard_detected(self, text: str) -> None:
-        """Called by the (opt-in) clipboard monitor; only links are considered, nothing is stored."""
-        known = self.preview.keys() | set(self.queue.active_keys()) | self._clipboard_seen
-        result = parse_url_list(text, known_keys=known)
+        """Called by the clipboard watcher; only links are considered and nothing is stored.
+
+        Download and video links open the pop-up (once per link per session); other links
+        are offered in the in-app banner when "Watch clipboard for links" is on. The
+        platform watchers already ignore copies made inside SwiftDrop.
+        """
+        settings = self.settings.get()
+        result = parse_url_list(text)
         if not result.urls:
             return
-        for parsed in result.urls:
+        remaining = [p for p in result.urls if p.key not in self._popup_seen]
+        if settings.clipboard_popup and self.capture.has_ui:
+            active = self.queue.active_keys()
+            offered = self._downloadable([p for p in remaining if p.key not in active])
+            if offered:
+                self._popup_seen.update(p.key for p in offered)
+                if len(offered) == 1:
+                    self.capture.offer_url(offered[0].url, origin="clipboard")
+                else:
+                    self.capture.offer_links([p.url for p in offered], origin="clipboard")
+                remaining = [p for p in remaining if p.key not in self._popup_seen]
+        if not settings.clipboard_monitoring:
+            return
+        known = self.preview.keys() | set(self.queue.active_keys()) | self._clipboard_seen
+        banner = [p for p in remaining if p.key not in known]
+        if not banner:
+            return
+        for parsed in banner:
             self._clipboard_seen.add(parsed.key)
         self.tracker.clipboard(
             {
-                "count": len(result.urls),
-                "urls": [p.url for p in result.urls[:500]],
+                "count": len(banner),
+                "urls": [p.url for p in banner[:500]],
                 "at": time.time(),
             }
         )
+
+    def _downloadable(self, links: list[ParsedUrl]) -> list[ParsedUrl]:
+        """Links worth a pop-up: a known file type or a site the video engine supports."""
+        picked: set[str] = set()
+        unknown: list[ParsedUrl] = []
+        for parsed in links:
+            info = self.registry.classify(parsed.url)
+            if info.blocked:
+                continue
+            if info.provider in ("direct", "ytdlp"):
+                picked.add(parsed.key)
+            elif info.provider == "auto":
+                unknown.append(parsed)
+        if self.registry.sites is not None and len(unknown) <= MAX_SITE_CHECKS:
+            picked.update(p.key for p in unknown if self.registry.site_match(p.url) is not None)
+        return [p for p in links if p.key in picked]
+
+    # -- requests from other launches ------------------------------------------------
+    def handle_message(self, message: dict[str, Any]) -> None:
+        """A validated inbox message (see :mod:`swiftdrop.handoff`)."""
+        if message["type"] == "show":
+            self.capture.show_main()
+        elif message["type"] == "add":
+            self.capture.offer_url(message["url"], origin="link")
 
     # -- maintenance ------------------------------------------------------------------
     def storage_info(self) -> dict[str, Any]:

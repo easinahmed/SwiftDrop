@@ -50,6 +50,9 @@ from swiftdrop.storage import Database
 log = get_logger("queue")
 
 CHECKPOINT_INTERVAL = 5.0
+# ``Job.meta`` keys that describe what the user asked for rather than resume state; a reset
+# (retry after cancel, partial-data cleanup) keeps them.
+PRESERVED_META = frozenset({"filename_override"})
 _SETTABLE_INFO = frozenset(
     {
         "title",
@@ -612,7 +615,7 @@ class DownloadQueue:
                 if job.state in (JobState.FAILED, JobState.CANCELLED, JobState.INTERRUPTED, JobState.PAUSED):
                     if job.state == JobState.CANCELLED:
                         job.reset_progress()
-                        job.meta.clear()
+                        _reset_meta(job)
                     job.state = JobState.QUEUED
                     job.error = None
                     job.note = None
@@ -622,7 +625,7 @@ class DownloadQueue:
                     count += 1
                 elif job.state == JobState.COMPLETED and job.file_missing:
                     job.reset_progress()
-                    job.meta.clear()
+                    _reset_meta(job)
                     job.state = JobState.QUEUED
                     job.filepath = None
                     job.file_missing = False
@@ -838,7 +841,7 @@ class DownloadQueue:
                             and job.state not in (JobState.COMPLETED, JobState.CANCELLED)
                         ):
                             job.reset_progress()
-                            job.meta.clear()
+                            _reset_meta(job)
                             self._save_quietly([job])
                             self._tracker.job(job.id)
                 finally:
@@ -858,6 +861,13 @@ class DownloadQueue:
                     self._release(job_ids)
                     self._cond.notify_all()
         return freed
+
+
+def _reset_meta(job: Job) -> None:
+    """Forget resume state (validators, segment maps, stream plans) but keep the user's choices."""
+    for key in list(job.meta):
+        if key not in PRESERVED_META:
+            del job.meta[key]
 
 
 def _unlink_size(path: Path) -> int:

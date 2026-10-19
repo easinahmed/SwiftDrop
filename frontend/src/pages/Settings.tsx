@@ -3,8 +3,18 @@ import { Copy, Folder, FolderOpen, HardDrive, ScrollText, Trash2 } from "lucide-
 import { api } from "../lib/api";
 import { formatBytes, shortPath } from "../lib/format";
 import { errorMessage, useStore } from "../lib/store";
-import type { AudioFormat, Diagnostics, Quality, Settings, StorageInfo, Theme, VideoFormat } from "../lib/types";
+import type {
+  AudioFormat,
+  Capabilities,
+  Diagnostics,
+  Quality,
+  Settings,
+  StorageInfo,
+  Theme,
+  VideoFormat,
+} from "../lib/types";
 import { Badge, Button, PageHeader, Segmented, Select, Toggle } from "../components/ui";
+import { BOOKMARKLET, Bookmarklet } from "../components/Bookmarklet";
 
 function Section({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
   return (
@@ -50,6 +60,69 @@ function BandwidthInput({ value, onCommit }: { value: number; onCommit: (kbps: n
       />
       <span className="text-[12px] text-ink-3">MB/s</span>
     </div>
+  );
+}
+
+function PopupSection({
+  settings,
+  capabilities,
+  update,
+}: {
+  settings: Settings;
+  capabilities: Capabilities | null;
+  update: (patch: Partial<Settings>) => Promise<void>;
+}) {
+  const toast = useStore((s) => s.toast);
+  const windows = capabilities?.platform === "windows";
+
+  const copyBookmark = async () => {
+    try {
+      await api.copyText(BOOKMARKLET);
+      toast("success", "Copied. Add it as a bookmark's URL in your browser.");
+    } catch (error) {
+      toast("error", errorMessage(error));
+    }
+  };
+
+  const quit = async () => {
+    try {
+      await api.quitApp();
+    } catch (error) {
+      toast("error", errorMessage(error));
+    }
+  };
+
+  return (
+    <Section title="Pop-up" description="Download from any app or browser without opening SwiftDrop first.">
+      <Row
+        label="Pop up when I copy a download link"
+        description={`Only download and video links trigger it; nothing you copy is saved. While on, closing the window keeps SwiftDrop running ${
+          windows ? "in the background (open SwiftDrop again to show it)" : "in the Dock"
+        }.`}
+      >
+        <Toggle
+          label="Pop up when I copy a download link"
+          checked={settings.clipboard_popup}
+          onChange={(v) => update({ clipboard_popup: v })}
+        />
+      </Row>
+      <Row
+        label="Send to SwiftDrop"
+        description="Drag this to your bookmarks bar. On any video or download page, click it to send the page to SwiftDrop."
+      >
+        <Bookmarklet />
+        <Button size="sm" variant="ghost" icon={<Copy className="size-3.5" />} onClick={copyBookmark} title="Copy the bookmark's address">
+          Copy
+        </Button>
+      </Row>
+      {windows && (
+        <Row label="Quit SwiftDrop" description="Stops the pop-up and pauses running downloads until you open SwiftDrop again.">
+          <Button size="sm" onClick={quit}>
+            Quit
+          </Button>
+        </Row>
+      )}
+    </Section>
   );
 }
 
@@ -237,8 +310,8 @@ export function SettingsPage() {
               <Toggle label="Notifications" checked={settings.notifications} onChange={(v) => update({ notifications: v })} />
             </Row>
             <Row
-              label="Watch clipboard for links"
-              description="Off by default. While on, copied links are offered for download — nothing is added without your click, and clipboard contents are never stored."
+              label="Offer other copied links in the app"
+              description="Off by default. While on, any copied link is offered in a banner inside SwiftDrop — nothing is added without your click, and clipboard contents are never stored."
             >
               <Toggle label="Clipboard monitoring" checked={settings.clipboard_monitoring} onChange={(v) => update({ clipboard_monitoring: v })} />
             </Row>
@@ -260,6 +333,8 @@ export function SettingsPage() {
               />
             </Row>
           </Section>
+
+          <PopupSection settings={settings} capabilities={capabilities} update={update} />
 
           <Section title="Privacy">
             <Row

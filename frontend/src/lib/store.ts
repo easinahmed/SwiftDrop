@@ -197,6 +197,7 @@ export const useStore = create<AppState>((set, get) => ({
       if (payload.settings) next.settings = payload.settings;
       if (payload.history_changed) next.historyVersion = s.historyVersion + 1;
       if (payload.clipboard) next.clipboard = payload.clipboard;
+      if (payload.navigate) next.page = payload.navigate;
       return next;
     });
     for (const notice of payload.notices ?? []) get().toast(notice.kind, notice.message);

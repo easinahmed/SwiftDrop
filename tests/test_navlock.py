@@ -61,7 +61,7 @@ def _index(monkeypatch):
 
 def test_endpoint_refuses_foreign_page(service):
     functions = Bridge(service).functions(FakeWindow("http://evil/"))
-    assert len(functions) == 30
+    assert len(functions) == 33
     for fn in functions:
         nargs = fn.__wrapped__.__code__.co_argcount
         assert fn(*([None] * nargs)) == {"ok": False, "error": "Not allowed."}
@@ -75,6 +75,14 @@ def test_endpoint_refuses_when_url_unknown(service):
 def test_endpoint_accepts_index(service):
     functions = {f.__name__: f for f in Bridge(service).functions(FakeWindow(INDEX_RAW + "#/x"))}
     assert functions["get_settings"]()["ok"] is True
+
+
+def test_capture_window_route_is_the_bundled_page(service):
+    """The confirm window loads index.html#/capture/<id>: the per-window check must accept it."""
+    assert Bridge.window_allowed(FakeWindow(INDEX + "#/capture/0123456789abcdef")) is True
+    assert Bridge.window_allowed(FakeWindow("file:///tmp/evil.html#/capture/0123456789abcdef")) is False
+    functions = {f.__name__: f for f in Bridge(service).functions(FakeWindow("http://evil/#/capture/1"))}
+    assert functions["decide_capture"]("0123456789abcdef", "start", "x", "/") == {"ok": False, "error": "Not allowed."}
 
 
 def test_push_is_skipped_on_foreign_page(service):

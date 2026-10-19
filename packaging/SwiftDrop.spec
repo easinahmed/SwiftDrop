@@ -95,5 +95,13 @@ app = BUNDLE(  # noqa: F821
         "NSHumanReadableCopyright": f"{APP_NAME} {APP_VERSION}. {APP_CREDIT}.",
         # Thumbnails from plain-http sites are shown inside the web view.
         "NSAppTransportSecurity": {"NSAllowsArbitraryLoadsInWebContent": True},
+        # swiftdrop://add?url=… (the "Send to SwiftDrop" bookmark) opens a confirm window.
+        "CFBundleURLTypes": [
+            {
+                "CFBundleURLName": f"{BUNDLE_ID}.add",
+                "CFBundleURLSchemes": ["swiftdrop"],
+                "CFBundleTypeRole": "Viewer",
+            }
+        ],
     },
 )

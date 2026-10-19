@@ -27,6 +27,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from swiftdrop.capture import DECISIONS, CaptureError
 from swiftdrop.logging_setup import get_logger
 from swiftdrop.paths import default_download_dir, web_root
 from swiftdrop.service import AppService, ServiceError
@@ -38,6 +39,7 @@ log = get_logger("bridge")
 MAX_TEXT_CHARS = 2_000_000
 MAX_IMPORT_BYTES = 5 * 1024 * 1024
 MAX_IDS = 20_000
+MAX_FILENAME_CHARS = 1024
 PUSH_INTERVAL = 0.2
 _ID_RE = re.compile(r"^[0-9a-f]{16}$")
 
@@ -136,10 +138,14 @@ class Bridge:
         self._window: Any = None
         self._publisher: threading.Thread | None = None
         self._stop = threading.Event()
+        self._quit: Callable[[], None] | None = None  # set by the window: quit for real (Windows has no Dock)
         self._approved_dirs: set[str] = {
             _resolve(service.settings.get().download_dir),
             _resolve(str(default_download_dir())),
         }
+
+    def set_quit_handler(self, handler: Callable[[], None]) -> None:
+        self._quit = handler
 
     def approve_dir(self, path: str) -> None:
         self._approved_dirs.add(_resolve(path))
@@ -223,10 +229,14 @@ class Bridge:
             payload["clipboard"] = changes.clipboard
         if changes.notices:
             payload["notices"] = changes.notices
+        if changes.navigate:
+            payload["navigate"] = changes.navigate
         return payload
 
-    def _dialog(self, kind: str, **kwargs: Any) -> Any:
-        if self._window is None:
+    def _dialog(self, kind: str, window: Any = None, **kwargs: Any) -> Any:
+        """A native file dialog attached to ``window`` (the calling window), else the main one."""
+        target = window if window is not None and hasattr(window, "create_file_dialog") else self._window
+        if target is None:
             raise ServiceError("No window available.")
         import webview
 
@@ -235,7 +245,7 @@ class Bridge:
             "open": webview.FileDialog.OPEN,
             "save": webview.FileDialog.SAVE,
         }[kind]
-        return self._window.create_file_dialog(dialog_type, **kwargs)
+        return target.create_file_dialog(dialog_type, **kwargs)
 
     # -- exposed functions --------------------------------------------------
     def functions(self, window: Any) -> list[Callable[..., Any]]:
@@ -383,7 +393,7 @@ class Bridge:
         @endpoint_
         def choose_folder(initial: Any) -> str | None:
             start = _str(initial or "", "Folder", 4096)
-            result = bridge._dialog("folder", directory=start if start and Path(start).is_dir() else "")
+            result = bridge._dialog("folder", window, directory=start if start and Path(start).is_dir() else "")
             if not result:
                 return None
             chosen = str(result[0] if isinstance(result, list | tuple) else result)
@@ -447,6 +457,33 @@ class Bridge:
         def open_download_folder() -> bool:
             return service.platform.open_path(Path(service.settings.get().download_dir))
 
+        # -- confirm windows for copied / sent links -------------------------------
+        @endpoint_
+        def get_capture(capture_id: Any) -> dict[str, Any]:
+            try:
+                return service.capture.capture_public(_id(capture_id, "capture"))
+            except CaptureError as exc:
+                raise BridgeError(str(exc)) from None
+
+        @endpoint_
+        def decide_capture(capture_id: Any, decision: Any, filename: Any, folder: Any) -> dict[str, Any]:
+            choice = _choice(decision, "choice", DECISIONS)
+            name = _str(filename, "File name", MAX_FILENAME_CHARS)
+            target = _str(folder, "Folder", 4096)
+            if choice in ("start", "later") and _resolve(target) != _resolve(service.settings.get().download_dir):
+                bridge.check_dir(target)  # only the default folder or one picked with Choose…
+            try:
+                return service.capture.decide(_id(capture_id, "capture"), choice, name, target)
+            except CaptureError as exc:
+                raise BridgeError(str(exc)) from None
+
+        @endpoint_
+        def quit_app() -> bool:
+            if bridge._quit is None:
+                raise BridgeError("Quit isn't available here.")
+            bridge._quit()
+            return True
+
         return [
             get_bootstrap,
             get_state,
@@ -478,4 +515,7 @@ class Bridge:
             open_logs_folder,
             open_partial_folder,
             open_download_folder,
+            get_capture,
+            decide_capture,
+            quit_app,
         ]

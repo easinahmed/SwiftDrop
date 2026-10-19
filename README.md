@@ -68,7 +68,8 @@ attached to that GitHub release.
 | **Downloads** | Every job with live progress, speed, ETA and size. Pause/resume/cancel/retry per item, for a selection, or for the whole queue (*Pause all*, *Resume all*, *Retry failed*, *Clear completed*). Export results (CSV) or failed links (TXT). |
 | **Playlists** | Playlists, albums, channels and feeds grouped into collections with overall progress. Pick individual items before downloading; unavailable items are skipped and items already downloaded aren't fetched again. |
 | **History** | Searchable, filterable list of past downloads with *Open*, *Show in Finder* and *Copy link*. Clearing history never deletes files. |
-| **Settings** | Destination, simultaneous downloads, bandwidth limit, default quality/format, theme, notifications, opt-in clipboard watching, resume-on-launch, open-at-login, browser sign-in, partial-file cleanup, diagnostics. |
+| **Pop-up** | Copy a download or video link anywhere and SwiftDrop pops up a small window to name it, pick a folder and **Start**, **Start later** or **Cancel**; several links at once go to New Download with **Add all**. The **Send to SwiftDrop** bookmark (Settings) sends the page you're on. While the pop-up is on, closing the window keeps SwiftDrop running (in the Dock on Mac; open it again to show it on Windows). |
+| **Settings** | Destination, simultaneous downloads, bandwidth limit, default quality/format, theme, notifications, the copy pop-up, an opt-in in-app banner for other copied links, resume-on-launch, open-at-login, browser sign-in, partial-file cleanup, diagnostics. |
 
 Keyboard: `⌘1`–`⌘4` switch sections, `⌘,` opens Settings, and `⌘↩` adds links or starts the download.
 
@@ -153,7 +154,7 @@ marked as missing and can be retried.
 | Restricted, validated preload API | Every argument is type- and size-checked in `ui/bridge.py`. Ids must match `[0-9a-f]{16}`. Errors return a message, never a traceback. |
 | No arbitrary paths/commands from renderer | Open and reveal take a job or history id, and the path comes from SwiftDrop's records. Destinations must be the saved default, `~/Downloads`, or a folder picked in the native dialog. No shell is ever invoked, and helper tools get fixed argument lists. |
 | CSP / no remote code | `index.html` CSP: scripts only from the bundle (`'unsafe-eval'` is required by pywebview's own bridge). All data is rendered as text (ESLint forbids `dangerouslySetInnerHTML`). The UI loads from `file://`, so no local HTTP server is started. |
-| Secrets | No passwords are requested or stored. Browser cookies are read per download only. Logs are redacted. Clipboard watching is off by default, never stores contents, and skips items marked concealed by password managers. |
+| Secrets | No passwords are requested or stored. Browser cookies are read per download only. Logs are redacted. Clipboard watching runs for the copy pop-up (on by default, one switch to turn it off): only download and video links trigger it, contents are never stored, and copies made inside SwiftDrop or marked concealed by password managers are skipped. Links from the clipboard or `swiftdrop://` are always shown for confirmation, never started on their own. |
 
 ---
 

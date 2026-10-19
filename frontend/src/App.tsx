@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { AlertTriangle, ClipboardCheck, Loader2, X } from "lucide-react";
+import { AlertTriangle, ClipboardCheck, Loader2, MousePointerClick, X } from "lucide-react";
 import { api, isPreviewMode } from "./lib/api";
 import { pluralize } from "./lib/format";
 import { errorMessage, useStore, type Page } from "./lib/store";
@@ -65,6 +65,48 @@ function ClipboardBanner() {
       <button type="button" aria-label="Dismiss" onClick={dismiss} className="rounded p-1 text-ink-3 hover:text-ink">
         <X className="size-3.5" />
       </button>
+    </div>
+  );
+}
+
+/** Shown once: the copy pop-up is on by default, so say what it does and how to turn it off. */
+function PopupNotice() {
+  const settings = useStore((s) => s.settings);
+  const setSettings = useStore((s) => s.setSettings);
+  const toast = useStore((s) => s.toast);
+  if (!settings || settings.popup_notice_seen || !settings.clipboard_popup) return null;
+  const answer = async (turnOff: boolean) => {
+    try {
+      setSettings(
+        await api.updateSettings(turnOff ? { popup_notice_seen: true, clipboard_popup: false } : { popup_notice_seen: true }),
+      );
+      if (turnOff) toast("info", "Pop-up turned off. You can turn it back on in Settings.");
+    } catch (error) {
+      toast("error", errorMessage(error));
+    }
+  };
+  return (
+    <div
+      role="status"
+      className="animate-pop fixed bottom-5 right-5 z-40 w-[340px] rounded-[14px] border border-line bg-surface p-4 shadow-pop"
+    >
+      <div className="flex items-start gap-3">
+        <div className="flex size-8 shrink-0 items-center justify-center rounded-[9px] bg-accent-soft text-accent-ink">
+          <MousePointerClick className="size-4" />
+        </div>
+        <p className="text-[12.5px] leading-[1.5] text-ink-2">
+          <span className="font-semibold text-ink">SwiftDrop pops up when you copy a download link.</span> Only download and
+          video links trigger it; nothing you copy is saved.
+        </p>
+      </div>
+      <div className="mt-3 flex justify-end gap-2">
+        <Button size="sm" variant="ghost" onClick={() => answer(true)}>
+          Turn off
+        </Button>
+        <Button size="sm" variant="primary" onClick={() => answer(false)}>
+          Got it
+        </Button>
+      </div>
     </div>
   );
 }
@@ -153,6 +195,7 @@ export default function App() {
         </div>
       </main>
       <ClipboardBanner />
+      <PopupNotice />
       <Toasts />
       <OpenConfirmDialog />
     </div>

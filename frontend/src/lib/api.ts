@@ -4,6 +4,9 @@
 import type {
   AnalyzeResult,
   Bootstrap,
+  CaptureDecision,
+  CaptureInfo,
+  CaptureResult,
   Diagnostics,
   HistoryEntry,
   PlaylistEntry,
@@ -132,4 +135,8 @@ export const api = {
   openLogs: () => call<boolean>("open_logs_folder"),
   openPartial: () => call<boolean>("open_partial_folder"),
   openDownloads: () => call<boolean>("open_download_folder"),
+  getCapture: (id: string) => call<CaptureInfo>("get_capture", id),
+  decideCapture: (id: string, decision: CaptureDecision, filename: string, folder: string) =>
+    call<CaptureResult>("decide_capture", id, decision, filename, folder),
+  quitApp: () => call<boolean>("quit_app"),
 };

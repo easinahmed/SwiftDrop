@@ -29,6 +29,12 @@ def _pick_name(url: str, final_url: str | None, disposition: str | None, content
     return name
 
 
+def _override(meta: dict[str, object]) -> str | None:
+    """A file name the user chose (browser confirm window); already sanitised when stored."""
+    value = meta.get("filename_override")
+    return value if isinstance(value, str) and value.strip() else None
+
+
 def _kind(name: str, content_type: str | None) -> MediaKind:
     kind = kind_for_mime(content_type)
     if kind in (MediaKind.OTHER, MediaKind.UNKNOWN):
@@ -71,7 +77,7 @@ class DirectProvider:
 
         def on_progress(update: ProgressUpdate) -> None:
             if not announced["done"] and state.get("final_url"):
-                name = _pick_name(
+                name = _override(ctx.meta) or _pick_name(
                     ctx.url, state.get("final_url"), state.get("content_disposition"), state.get("content_type")
                 )
                 ctx.set_info(
@@ -98,7 +104,9 @@ class DirectProvider:
         if result is None:
             result = self._factory().download(ctx.url, part, ctx.token, on_progress, state)
         ctx.checkpoint()
-        name = _pick_name(ctx.url, result.final_url, result.content_disposition, result.content_type)
+        name = _override(ctx.meta) or _pick_name(
+            ctx.url, result.final_url, result.content_disposition, result.content_type
+        )
         kind = _kind(name, result.content_type)
         ctx.report(ProgressUpdate(phase="Saving"))
         final_path = ctx.finalize(part, name, kind)

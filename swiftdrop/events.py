@@ -25,6 +25,7 @@ class Changes:
     history: bool = False
     clipboard: dict[str, Any] | None = None
     notices: list[dict[str, Any]] = field(default_factory=list)
+    navigate: str | None = None  # a page the main window should switch to
 
     def empty(self) -> bool:
         return not (
@@ -37,6 +38,7 @@ class Changes:
             or self.history
             or self.clipboard is not None
             or self.notices
+            or self.navigate is not None
         )
 
 
@@ -93,6 +95,9 @@ class ChangeTracker:
 
     def notice(self, kind: str, message: str, **extra: Any) -> None:
         self._mark(lambda c: c.notices.append({"kind": kind, "message": message, **extra}))
+
+    def navigate(self, page: str) -> None:
+        self._mark(lambda c: setattr(c, "navigate", page))
 
     def wait(self, timeout: float) -> bool:
         with self._cond:

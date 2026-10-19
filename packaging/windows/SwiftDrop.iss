@@ -46,6 +46,14 @@ Type: filesandordirs; Name: "{app}\_internal"
 [Files]
 Source: "..\..\dist\SwiftDrop\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+[Registry]
+; swiftdrop://add?url=... links (the "Send to SwiftDrop" bookmark) open SwiftDrop's confirm window.
+; Per-user (HKCU), like the install itself; removed again on uninstall.
+Root: HKCU; Subkey: "Software\Classes\swiftdrop"; ValueType: string; ValueName: ""; ValueData: "URL:SwiftDrop Protocol"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\swiftdrop"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\swiftdrop\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"",0"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\swiftdrop\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""; Flags: uninsdeletekey
+
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon

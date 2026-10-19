@@ -779,3 +779,40 @@ def test_finish_failure_releases_its_reservation(tmp_path, monkeypatch):
     # The worker releases its hold after the state flips; a leaked hold never clears.
     assert wait_for(lambda: not queue._reserved), "the finishing job's reservation leaked"
     queue.shutdown(timeout=2)
+
+
+def test_filename_override_is_used_and_survives_resets(tmp_path, http_server):
+    """A name chosen in the browser confirm window wins over the server's, and resets keep it."""
+    url = http_server.add_file("server-name.bin", make_bytes(50_000))
+    provider = DirectProvider(lambda: HttpDownloader(backoff_base=0.01, backoff_max=0.02))
+    queue, _, _, downloads = build_queue(tmp_path, provider)
+    queue.start()
+    job = Job(url=url, key=url, destination=str(downloads), provider="direct", meta={"filename_override": "Mine.bin"})
+    (job_id,) = queue.add([job])
+    assert wait_for(lambda: queue.get(job_id).state == JobState.COMPLETED, timeout=15)
+    assert (downloads / "Mine.bin").read_bytes() == make_bytes(50_000)
+    assert queue.get(job_id).filename == "Mine.bin"
+    assert not (downloads / "server-name.bin").exists()
+    queue.shutdown(timeout=2)
+
+
+def test_resets_keep_filename_override_but_clear_resume_state(tmp_path):
+    provider = FakeProvider()
+    queue, _, _, downloads = build_queue(tmp_path, provider)
+    queue.start()
+    (job_id,) = queue.add(make_jobs(["https://e.com/fail"], downloads))
+    assert wait_for(lambda: queue.get(job_id).state == JobState.FAILED)
+    with queue._lock:
+        queue._jobs[job_id].meta.update(
+            {"filename_override": "keep.bin", "http": {"etag": '"v1"'}, "announced": True, "streams": {}}
+        )
+    (queue.staging_dir(job_id)).mkdir(parents=True, exist_ok=True)
+    queue.clean_all_partials()
+    assert queue.get(job_id).meta == {"filename_override": "keep.bin"}
+    with queue._lock:
+        queue._jobs[job_id].meta["http"] = {"etag": '"v2"'}
+    queue.cancel([job_id])
+    queue.retry([job_id])
+    assert queue.get(job_id).meta.get("filename_override") == "keep.bin"
+    assert "http" not in queue.get(job_id).meta
+    queue.shutdown(timeout=2)

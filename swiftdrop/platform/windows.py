@@ -55,6 +55,10 @@ def _win32() -> tuple[Any, Any] | None:
     user32.RegisterClipboardFormatW.restype = wintypes.UINT
     user32.GetClipboardSequenceNumber.argtypes = []
     user32.GetClipboardSequenceNumber.restype = wintypes.DWORD
+    user32.GetForegroundWindow.argtypes = []
+    user32.GetForegroundWindow.restype = wintypes.HWND
+    user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user32.GetWindowThreadProcessId.restype = wintypes.DWORD
     user32.CreateWindowExW.argtypes = [
         wintypes.DWORD,
         wintypes.LPCWSTR,
@@ -192,6 +196,17 @@ class WindowsPlatform:
     def _sequence_number(self) -> int:
         return int(self._api[0].GetClipboardSequenceNumber()) if self._api is not None else 0
 
+    def _app_in_front(self) -> bool:
+        """True while one of SwiftDrop's own windows is in front (copies made in the app)."""
+        if self._api is None:
+            return False
+        from ctypes import wintypes
+
+        user32 = self._api[0]
+        pid = wintypes.DWORD(0)
+        user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), ctypes.byref(pid))
+        return int(pid.value) == os.getpid()
+
     def start_clipboard_monitor(self, callback: Callable[[str], None]) -> None:
         if self._api is None or (self._monitor_thread and self._monitor_thread.is_alive()):
             return
@@ -205,6 +220,8 @@ class WindowsPlatform:
                     if number == last:
                         continue
                     last = number
+                    if self._app_in_front():
+                        continue  # copied inside SwiftDrop (Copy link, Ctrl+C): never offer it back
                     text = self.read_clipboard()
                 except Exception:
                     log.debug("Clipboard poll failed", exc_info=True)

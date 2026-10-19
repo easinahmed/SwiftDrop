@@ -163,6 +163,8 @@ export interface Settings {
   save_history: boolean;
   cookies_from_browser: string;
   verbose_logging: boolean;
+  clipboard_popup: boolean;
+  popup_notice_seen: boolean;
 }
 
 export interface Stats {
@@ -179,6 +181,7 @@ export interface Capabilities {
   ffmpeg: boolean;
   login_item: boolean;
   js_runtime: string | null;
+  platform: "mac" | "windows";
 }
 
 export interface Bootstrap {
@@ -242,6 +245,7 @@ export interface PushPayload {
   history_changed?: boolean;
   clipboard?: { count: number; urls: string[]; at: number };
   notices?: Notice[];
+  navigate?: "home" | "downloads" | "collections" | "history" | "settings";
 }
 
 export interface Diagnostics {
@@ -262,4 +266,31 @@ export interface StorageInfo {
   partial_bytes: number;
   partial_dir: string;
   download_dir_free: number | null;
+}
+
+/** A copied or sent link waiting in its confirm window. */
+export interface CaptureInfo {
+  id: string;
+  /** file: a direct download; page: a video page; links: several links (or a playlist). */
+  kind: "file" | "page" | "links";
+  origin: "clipboard" | "link";
+  url: string;
+  urls: string[];
+  count: number;
+  sites: string[];
+  source: string;
+  label: string;
+  filename: string;
+  size: number | null;
+  media: MediaKind;
+  folder: string;
+  theme: Theme;
+  quality_label: string;
+}
+
+export type CaptureDecision = "start" | "later" | "cancel" | "add_all";
+
+export interface CaptureResult {
+  decision: CaptureDecision;
+  job_id: string | null;
 }
