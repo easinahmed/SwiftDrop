@@ -15,6 +15,7 @@ worker thread, so the queue's concurrency limit bounds it like everything else.
 
 from __future__ import annotations
 
+import sys
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -251,7 +252,8 @@ class YtDlpProvider:
             "continuedl": True,
             "updatetime": False,
             "windowsfilenames": False,
-            "trim_file_name": 180,
+            # Windows paths stop at 260 characters and the staging folder already takes ~70 of them.
+            "trim_file_name": 120 if sys.platform == "win32" else 180,
             "check_formats": None,
         }
         ffmpeg = binaries.find_ffmpeg()
@@ -554,6 +556,8 @@ class YtDlpProvider:
 
         Returns the converted file (in the staging folder) or ``path`` when no conversion is needed.
         """
+        if sys.platform == "win32":
+            return path  # Media Player plays AV1/VP9/HEVC; QuickTime's HEVC encoder is macOS-only
         video = _video_format(info)
         if video is None:
             return path

@@ -6,10 +6,15 @@ navigation delegate is wrapped here: main-frame navigations are only allowed to 
 bundled ``index.html`` (any fragment) and ``about:blank``; sub-frame navigations are
 refused; anything else is cancelled. ``target=_blank`` links are already routed to the
 external browser by pywebview and never reach this check.
+
+The lock is macOS-only. pywebview's WebView2 backend (Windows) has no hook that can veto
+a navigation, so there the per-call check in ``bridge.py`` (which compares the window's
+current URL with :func:`normalize_url`) is what keeps foreign pages away from the bridge.
 """
 
 from __future__ import annotations
 
+import sys
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
@@ -23,10 +28,18 @@ _installed_for: str | None = None
 
 
 def normalize_url(url: str) -> str:
-    """Comparable form: no fragment, percent-decoded path, lowercase scheme and host."""
+    """Comparable form: no fragment, percent-decoded path, lowercase scheme and host.
+
+    On Windows, file paths are case-insensitive and may use backslashes (``C:\\`` vs ``c:\\``),
+    so ``file:`` paths are compared with forward slashes and casefolded.
+    """
     parts = urlsplit(url.strip())
+    scheme = parts.scheme.lower()
     host = (parts.netloc or "").lower()
-    return f"{parts.scheme.lower()}://{host}{unquote(parts.path)}" + (f"?{parts.query}" if parts.query else "")
+    path = unquote(parts.path)
+    if sys.platform == "win32" and scheme == "file":
+        path = path.replace("\\", "/").casefold()
+    return f"{scheme}://{host}{path}" + (f"?{parts.query}" if parts.query else "")
 
 
 def navigation_allowed(url: str, main_frame: bool, index_url: str) -> bool:

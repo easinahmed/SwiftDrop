@@ -1,4 +1,8 @@
-"""Quarantine and where-from attributes, plus the "can this run code?" check."""
+"""Quarantine and where-from attributes, plus the "can this run code?" check.
+
+On Windows the equivalent is the Mark of the Web: a ``Zone.Identifier`` alternate
+data stream (Internet zone) that SmartScreen and Office check before running a file.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +10,7 @@ import ctypes
 import ctypes.util
 import os
 import plistlib
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -42,6 +47,39 @@ EXECUTABLE_EXTS = frozenset(
     ]
 )
 
+# Windows file types that run code or change the system when opened (in addition to the list above).
+WINDOWS_EXECUTABLE_EXTS = frozenset(
+    [
+        "exe",
+        "msi",
+        "msp",
+        "bat",
+        "cmd",
+        "com",
+        "scr",
+        "pif",
+        "cpl",
+        "ps1",
+        "psm1",
+        "vbs",
+        "vbe",
+        "js",
+        "jse",
+        "wsf",
+        "wsh",
+        "hta",
+        "lnk",
+        "url",
+        "reg",
+        "jar",
+        "msix",
+        "msixbundle",
+        "appx",
+        "appxbundle",
+        "appref-ms",
+    ]
+)
+
 _libc: ctypes.CDLL | None = None
 
 
@@ -69,8 +107,36 @@ def _setxattr(path: Path, name: str, value: bytes) -> None:
         raise OSError(err, os.strerror(err))
 
 
+def zone_identifier(origin_url: str | None, referrer: str | None = None) -> str:
+    """Contents of the ``Zone.Identifier`` stream: Internet zone (3) plus where the file came from."""
+    lines = ["[ZoneTransfer]", "ZoneId=3"]
+    for key, url in (("ReferrerUrl", referrer), ("HostUrl", origin_url)):
+        # Control characters (CR/LF above all) could inject extra keys such as ZoneId=0.
+        clean = "".join(ch for ch in url or "" if ch.isprintable())
+        if clean:
+            lines.append(f"{key}={clean}")
+    return "\r\n".join(lines) + "\r\n"
+
+
+def _apply_mark_of_the_web(path: Path, origin_url: str | None, referrer: str | None) -> bool:
+    try:
+        if not path.is_file():
+            raise FileNotFoundError(path)
+        with open(f"{path}:Zone.Identifier", "wb") as stream:
+            stream.write(zone_identifier(origin_url, referrer).encode("utf-8"))
+        return True
+    except OSError as exc:  # e.g. FAT32/exFAT volumes have no alternate data streams
+        log.warning("Could not mark %s as downloaded from the internet: %s", path.name, exc)
+        return False
+
+
 def apply_quarantine(path: Path, origin_url: str | None, referrer: str | None = None, agent: str = APP_NAME) -> bool:
-    """Mark a downloaded file so Gatekeeper checks it and Finder shows where it came from."""
+    """Mark a downloaded file so Gatekeeper checks it and Finder shows where it came from.
+
+    On Windows this writes the Mark of the Web instead (``agent`` is not recorded there).
+    """
+    if sys.platform == "win32":
+        return _apply_mark_of_the_web(path, origin_url, referrer)
     try:
         value = f"0081;{int(time.time()):08x};{agent};{uuid.uuid4()}"
         _setxattr(path, QUARANTINE_ATTR, value.encode())
@@ -85,7 +151,8 @@ def apply_quarantine(path: Path, origin_url: str | None, referrer: str | None = 
 
 def needs_open_confirmation(path: Path) -> bool:
     """True when opening the file could run code (app bundles, scripts, installers, +x files)."""
-    if path.suffix.lower().lstrip(".") in EXECUTABLE_EXTS:
+    ext = path.suffix.lower().lstrip(".")
+    if ext in EXECUTABLE_EXTS or (sys.platform == "win32" and ext in WINDOWS_EXECUTABLE_EXTS):
         return True
     try:
         if path.is_dir():

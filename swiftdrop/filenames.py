@@ -5,6 +5,7 @@ from __future__ import annotations
 import mimetypes
 import os
 import re
+import sys
 import unicodedata
 from email.message import Message
 from pathlib import Path
@@ -13,6 +14,8 @@ from urllib.parse import unquote, urlsplit
 from swiftdrop.models import MediaKind
 
 MAX_NAME_BYTES = 240  # APFS allows 255 UTF-8 bytes; leave room for " (999)" and ".part"
+if sys.platform == "win32":
+    MAX_NAME_BYTES = 160  # keeps "<Downloads>\<subfolder>\<name>" under the 260-character path limit
 DEFAULT_STEM = "download"
 
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")

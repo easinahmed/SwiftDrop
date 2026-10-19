@@ -4,6 +4,10 @@ Search order: explicit environment override → binaries bundled inside the app
 (``Contents/Frameworks/bin``) or provisioned into ``vendor/bin/<arch>`` for
 development → well-known install locations. Apps launched from Finder don't
 inherit the shell ``PATH``, so Homebrew locations are probed explicitly.
+
+On Windows the tools are ``.exe`` files: the installed app uses only its bundled
+``bin`` folder (plus Node.js from Program Files); from source, ``vendor/bin/windows-x64``
+and ``PATH`` are searched.
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ import platform
 import re
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,6 +30,14 @@ _SYSTEM_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin", "/usr/b
 # Frozen builds trust only these locations for the JavaScript runtime.
 _FROZEN_JS_DIRS = ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin")
 
+WINDOWS_ARCH_DIR = "windows-x64"
+# Console tools started from the windowed Windows app must not flash a console window (0 elsewhere).
+NO_WINDOW: int = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def _windows() -> bool:
+    return sys.platform == "win32"
+
 
 def machine_arch() -> str:
     machine = platform.machine().lower()
@@ -35,7 +48,8 @@ def bundled_bin_dirs() -> list[Path]:
     root = resource_root()
     if is_frozen():
         return [root / "bin"]
-    return [root / "vendor" / "bin" / machine_arch(), root / "vendor" / "bin"]
+    arch = WINDOWS_ARCH_DIR if _windows() else machine_arch()
+    return [root / "vendor" / "bin" / arch, root / "vendor" / "bin"]
 
 
 def _is_exe(path: Path) -> bool:
@@ -50,6 +64,8 @@ def _find(
     use_path: bool = True,
 ) -> Path | None:
     frozen = is_frozen()
+    if _windows():
+        name = f"{name}.exe"
     override = None if frozen else os.environ.get(env_var)
     if override:
         candidate = Path(override).expanduser()
@@ -69,10 +85,14 @@ def _find(
 
 
 def find_ffmpeg() -> Path | None:
+    if _windows():
+        return _find("ffmpeg", "SWIFTDROP_FFMPEG", system_dirs=(), use_path=not is_frozen())
     return _find("ffmpeg", "SWIFTDROP_FFMPEG")
 
 
 def find_ffprobe() -> Path | None:
+    if _windows():
+        return _find("ffprobe", "SWIFTDROP_FFPROBE", system_dirs=(), use_path=not is_frozen())
     return _find("ffprobe", "SWIFTDROP_FFPROBE")
 
 
@@ -90,7 +110,13 @@ def is_bundled(path: Path | None) -> bool:
 def tool_version(path: str, args: tuple[str, ...] = ("-version",)) -> str | None:
     try:
         out = subprocess.run(  # fixed executable path + constant arguments
-            [path, *args], capture_output=True, text=True, timeout=10, check=False
+            [path, *args],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+            creationflags=NO_WINDOW,
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -128,15 +154,21 @@ def find_js_runtime() -> JsRuntime | None:
     """Best supported JavaScript runtime for yt-dlp's YouTube challenge solver."""
     home = Path.home()
     frozen = is_frozen()
+    nodejs = str(Path(os.environ.get("PROGRAMFILES") or r"C:\Program Files") / "nodejs")
     for name, extra in (
         ("deno", (str(home / ".deno" / "bin"),)),
         ("node", (str(home / ".volta" / "bin"),)),
         ("bun", (str(home / ".bun" / "bin"),)),
     ):
-        if frozen:
-            path = _find(name, f"SWIFTDROP_{name.upper()}", system_dirs=_FROZEN_JS_DIRS, use_path=False)
+        env_var = f"SWIFTDROP_{name.upper()}"
+        if _windows():
+            # Node.js from Program Files (the installed app too); home folders and PATH only from source.
+            system_dirs = (nodejs,) if name == "node" else ()
+            path = _find(name, env_var, extra, system_dirs=system_dirs, use_path=not frozen)
+        elif frozen:
+            path = _find(name, env_var, system_dirs=_FROZEN_JS_DIRS, use_path=False)
         else:
-            path = _find(name, f"SWIFTDROP_{name.upper()}", extra)
+            path = _find(name, env_var, extra)
         if path is None:
             continue
         line = tool_version(str(path), ("--version",)) or ""

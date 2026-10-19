@@ -164,7 +164,8 @@ class Bridge:
             return False
         if not current:
             return False
-        return normalize_url(current) == normalize_url(bundled_index_url())
+        # str(): pywebview's WebView2 backend can hand back a .NET string/Uri object.
+        return normalize_url(str(current)) == normalize_url(bundled_index_url())
 
     def start_publisher(self) -> None:
         self._publisher = threading.Thread(target=self._publish_loop, name="ui-publisher", daemon=True)

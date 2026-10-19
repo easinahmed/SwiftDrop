@@ -9,6 +9,7 @@ import sys
 from swiftdrop.appinfo import APP_NAME, APP_VERSION
 from swiftdrop.logging_setup import configure_logging, get_logger
 from swiftdrop.paths import default_paths
+from swiftdrop.platform import Platform
 
 
 def _parse(argv: list[str] | None) -> argparse.Namespace:
@@ -30,6 +31,11 @@ def _ensure_std_streams() -> None:
 
 
 def _activate_running_instance() -> None:
+    if sys.platform == "win32":
+        from swiftdrop.platform.windows import activate_window
+
+        activate_window(APP_NAME)
+        return
     try:
         from AppKit import NSApplicationActivateAllWindows, NSRunningApplication
     except ImportError:
@@ -37,6 +43,16 @@ def _activate_running_instance() -> None:
     apps = NSRunningApplication.runningApplicationsWithBundleIdentifier_("com.swiftdrop.SwiftDrop")
     if apps:
         apps[0].activateWithOptions_(NSApplicationActivateAllWindows)
+
+
+def _native_platform() -> Platform:
+    if sys.platform == "win32":
+        from swiftdrop.platform.windows import WindowsPlatform
+
+        return WindowsPlatform()
+    from swiftdrop.platform.macos import MacPlatform
+
+    return MacPlatform()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -59,11 +75,10 @@ def main(argv: list[str] | None = None) -> int:
         _activate_running_instance()
         return 0
 
-    from swiftdrop.platform.macos import MacPlatform
     from swiftdrop.service import AppService
     from swiftdrop.ui.window import run
 
-    service = AppService(paths, MacPlatform())
+    service = AppService(paths, _native_platform())
     service.start()
     try:
         run(service, debug=args.debug)

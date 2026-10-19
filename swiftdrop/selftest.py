@@ -8,8 +8,10 @@ contains a working UI, download engines and helper binaries:
 3. real direct downloads from a local HTTP server, including a failing link
 4. an HLS stream downloaded by yt-dlp and merged by FFmpeg
 5. an RSS feed expanded into a playlist
+6. on Windows: pythonnet and the WebView2 interop assemblies the window needs
 
-Exit status 0 means every check passed.
+Exit status 0 means every check passed. The windowed Windows build has no console,
+so the summary is also written to the file named by ``SWIFTDROP_SELFTEST_REPORT``.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 from collections.abc import Callable
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -81,7 +84,31 @@ def _wait(predicate: Callable[[], bool], timeout: float) -> bool:
     return predicate()
 
 
+def _write_report(text: str) -> None:
+    report = os.environ.get("SWIFTDROP_SELFTEST_REPORT")
+    if not report:
+        return
+    try:
+        Path(report).write_text(text, encoding="utf-8")
+    except OSError as exc:
+        print(f"Could not write the report to {report}: {exc}", flush=True)
+
+
 def run_self_test() -> int:
+    """Run every check; an unexpected crash still ends in a report and exit status 1.
+
+    (A windowed Windows build would otherwise show a blocking traceback dialog.)
+    """
+    try:
+        return _run_checks()
+    except Exception:
+        text = f"{APP_NAME} self-test crashed:\n{traceback.format_exc()}"
+        print(text, flush=True)
+        _write_report(text)
+        return 1
+
+
+def _run_checks() -> int:
     home = Path(tempfile.mkdtemp(prefix="swiftdrop-selftest-"))
     os.environ["SWIFTDROP_HOME"] = str(home)
     results: list[tuple[str, bool, str]] = []
@@ -94,7 +121,13 @@ def run_self_test() -> int:
         except Exception as exc:
             results.append((name, False, f"{type(exc).__name__}: {exc}"))
 
-    print(f"{APP_NAME} {APP_VERSION} self-test (frozen={getattr(sys, 'frozen', False)})", flush=True)
+    lines: list[str] = []
+
+    def say(line: str) -> None:
+        lines.append(line)
+        print(line, flush=True)
+
+    say(f"{APP_NAME} {APP_VERSION} self-test (frozen={getattr(sys, 'frozen', False)}, platform={sys.platform})")
     from swiftdrop import binaries
     from swiftdrop.logging_setup import configure_logging
     from swiftdrop.paths import default_paths, web_root
@@ -130,8 +163,21 @@ def run_self_test() -> int:
             require(bundled, f"ffmpeg is not the bundled copy: {path}")
         return f"ffmpeg {version} ({'bundled' if bundled else path}), ffprobe {'ok' if probe else 'missing'}"
 
+    def windows_ui() -> str:
+        import clr  # pythonnet: pywebview drives WinForms + WebView2 through it
+        from webview.util import interop_dll_path
+
+        clr.AddReference("System.Windows.Forms")
+        for dll in ("Microsoft.Web.WebView2.Core.dll", "Microsoft.Web.WebView2.WinForms.dll"):
+            path = interop_dll_path(dll)
+            require(Path(path).is_file(), f"missing {dll}")
+            clr.AddReference(path)
+        return "pythonnet, WinForms and WebView2 interop assemblies load"
+
     check("bundled resources", resources)
     check("ffmpeg", ffmpeg)
+    if sys.platform == "win32":
+        check("Windows UI runtime", windows_ui)
 
     from swiftdrop.models import JobState
     from swiftdrop.platform import NullPlatform
@@ -179,6 +225,7 @@ def run_self_test() -> int:
                  "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest",
                  "-f", "hls", "-hls_time", "1", "-hls_list_size", "0", str(out / "index.m3u8")],
                 check=True, capture_output=True, timeout=120,
+                stdin=subprocess.DEVNULL, creationflags=binaries.NO_WINDOW,
             )  # fmt: skip
             analysis = service.analyze_text(f"{base}/hls/index.m3u8")
             item = analysis["added"][0]
@@ -219,11 +266,12 @@ def run_self_test() -> int:
 
     width = max(len(name) for name, _, _ in results)
     for name, ok, detail in results:
-        print(f"{'PASS' if ok else 'FAIL'}  {name.ljust(width)}  {detail}", flush=True)
+        say(f"{'PASS' if ok else 'FAIL'}  {name.ljust(width)}  {detail}")
     passed = all(ok for _, ok, _ in results)
-    print("All checks passed." if passed else "Some checks FAILED.", flush=True)
+    say("All checks passed." if passed else "Some checks FAILED.")
+    if not passed:
+        say(f"Logs kept in {home}")
+    _write_report("\n".join(lines) + "\n")
     if passed:
         shutil.rmtree(home, ignore_errors=True)
-    else:
-        print(f"Logs kept in {home}", flush=True)
     return 0 if passed else 1

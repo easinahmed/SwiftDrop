@@ -11,10 +11,12 @@ from __future__ import annotations
 import collections
 import json
 import subprocess
+import sys
 import threading
 from collections.abc import Callable
 from pathlib import Path
 
+from swiftdrop.binaries import NO_WINDOW
 from swiftdrop.cancel import CancelToken, JobStopped, StopReason
 from swiftdrop.errors import failure
 from swiftdrop.logging_setup import get_logger
@@ -69,6 +71,16 @@ def convert_for_quicktime(
     ``audio_codec`` is the source audio codec when the caller knows it; otherwise it is probed.
     Audio is copied only when AAC, else transcoded to AAC 192k.
     """
+    if sys.platform == "win32":
+        # hevc_videotoolbox exists only on macOS; Windows plays the original codecs instead.
+        raise failure(
+            "unsupported",
+            "QuickTime conversion requested on Windows",
+            title="Conversion isn't available",
+            message="Converting for QuickTime Player needs macOS.",
+            hint="Choose “Original quality (MKV)” or retry the download.",
+            retryable=False,
+        )
     token.raise_if_stopped()
     if audio_codec is None:
         probe = ffprobe or ffmpeg.with_name("ffprobe")
@@ -83,7 +95,13 @@ def convert_for_quicktime(
         str(dst),
     ]  # fmt: skip
     proc = subprocess.Popen(
-        cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace"
+        cmd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        errors="replace",
+        creationflags=NO_WINDOW,
     )
     stderr_tail: collections.deque[str] = collections.deque(maxlen=20)
     finished = threading.Event()
@@ -167,7 +185,13 @@ def merge_streams(
         cmd += ["-movflags", "+faststart"]
     cmd.append(str(dst))
     proc = subprocess.Popen(
-        cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, errors="replace"
+        cmd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        errors="replace",
+        creationflags=NO_WINDOW,
     )
     stderr = ""
     try:
@@ -203,7 +227,15 @@ def probe_audio_codec(path: Path, ffprobe: Path) -> str | None:
         "-show_entries", "stream=codec_name", "-of", "json", str(path),
     ]  # fmt: skip
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=60, check=True).stdout
+        out = subprocess.run(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=True,
+            creationflags=NO_WINDOW,
+        ).stdout
         streams = json.loads(out).get("streams") or []
     except (OSError, subprocess.SubprocessError, ValueError):
         log.warning("ffprobe failed on %s", path.name, exc_info=True)
@@ -221,7 +253,15 @@ def probe_video_codec(path: Path, ffprobe: Path) -> tuple[str | None, int | None
         "-show_entries", "stream=codec_name,codec_tag_string,bit_rate", "-of", "json", str(path),
     ]  # fmt: skip
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=60, check=True).stdout
+        out = subprocess.run(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=True,
+            creationflags=NO_WINDOW,
+        ).stdout
         streams = json.loads(out).get("streams") or []
     except (OSError, subprocess.SubprocessError, ValueError):
         log.warning("ffprobe failed on %s", path.name, exc_info=True)

@@ -39,6 +39,27 @@ Optional: YouTube now expects a JavaScript runtime for some formats. SwiftDrop a
 locations, `~/.deno`, `~/.volta` or your `PATH`. Without one, YouTube still works, with yt-dlp's
 reduced fallback.
 
+## Windows
+
+1. Download `SwiftDrop-Setup-<version>.exe` from the [Releases](../../releases) page and run it. It
+   installs for your user account only, so no administrator rights are needed.
+2. The installer isn't code-signed, so SmartScreen may warn you: click **More info** → **Run anyway**.
+
+**Requirements:** Windows 10 or 11, 64-bit (x64). The window uses Microsoft Edge WebView2, which is built
+into current Windows versions.
+
+Videos are saved in their original codec, with no conversion for QuickTime. They play in Media Player. If
+a video won't play, install Microsoft's free **AV1 Video Extension** or the **HEVC Video Extensions** from
+the Microsoft Store. Node.js 22+ in `C:\Program Files\nodejs` is used for YouTube's JavaScript checks, if
+you have it installed. "Open at login" and system notifications aren't available on Windows yet.
+
+The installer is built by GitHub Actions (`.github/workflows/windows.yml`) on every push to the `windows`
+branch and on `v*` tags. The workflow builds the UI, bundles the app and a pinned gyan.dev FFmpeg build
+with PyInstaller (`packaging/windows/SwiftDrop-windows.spec`), and runs the bundled app's `--self-test`.
+It then builds the installer with Inno Setup (`packaging/windows/SwiftDrop.iss`). The installer is kept
+as a workflow artifact. For tags, or when you run the workflow manually with `release_tag`, it's also
+attached to that GitHub release.
+
 ## Using SwiftDrop
 
 | Screen | What it does |

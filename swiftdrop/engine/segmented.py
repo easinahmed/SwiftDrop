@@ -19,6 +19,7 @@ import collections
 import contextlib
 import os
 import random
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -62,6 +63,18 @@ BLOCK = 256 * 1024  # largest write; a worker may write one block past its recor
 READ = 64 * 1024  # read size; workers check for stop, range changes and stalls between reads
 MAX_RETRIES = 6  # consecutive failed attempts on one range before the download fails
 _TRANSIENT = (requests.ConnectionError, requests.Timeout, requests.exceptions.ChunkedEncodingError, Urllib3Error)
+# Windows opens os.open() files in text mode (LF -> CRLF on write) unless O_BINARY is set.
+_O_BINARY: int = getattr(os, "O_BINARY", 0)
+# Windows can only fsync (FlushFileBuffers) a handle opened for writing.
+_O_SYNC_FLAGS = os.O_WRONLY | _O_BINARY if sys.platform == "win32" else os.O_RDONLY
+
+
+def _pwrite(fd: int, data: memoryview, offset: int) -> int:
+    """``os.pwrite``; Windows has none, so seek + write there (safe: every worker owns its fd)."""
+    if sys.platform == "win32":
+        os.lseek(fd, offset, os.SEEK_SET)
+        return os.write(fd, data)
+    return os.pwrite(fd, data, offset)
 
 
 class SegmentedUnavailable(Exception):
@@ -289,7 +302,7 @@ class SegmentedDownloader:
     def _allocate(self, seg_path: Path, size: int, state: dict[str, Any]) -> None:
         try:
             _check_disk_space(seg_path.parent, size)
-            fd = os.open(seg_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666)  # umask applies, like open()
+            fd = os.open(seg_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | _O_BINARY, 0o666)  # umask applies
             try:
                 os.ftruncate(fd, size)
             finally:
@@ -344,7 +357,7 @@ class SegmentedDownloader:
         """Flush the file, then publish the map (by assignment only: the queue copies ``state`` unlocked)."""
         snapshot = job.snapshot()
         try:
-            fd = os.open(job.seg_path, os.O_RDONLY)
+            fd = os.open(job.seg_path, _O_SYNC_FLAGS)
             try:
                 os.fsync(fd)  # what the map says is written must survive a crash
             finally:
@@ -361,7 +374,7 @@ class SegmentedDownloader:
                     if job.halt.is_set() or job.token.stopped or not job.has_work():
                         return
                 acquired = True
-            fd = os.open(job.seg_path, os.O_WRONLY)
+            fd = os.open(job.seg_path, os.O_WRONLY | _O_BINARY)
             try:
                 conn = _Conn(self._session_factory())
                 job.opened(1)
@@ -455,7 +468,7 @@ class SegmentedDownloader:
             view = memoryview(data)[:length]
             offset = pos
             while view:
-                written = os.pwrite(fd, view, offset)
+                written = _pwrite(fd, view, offset)
                 view, offset = view[written:], offset + written
             job.record(seg, length)
             total += length

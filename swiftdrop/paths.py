@@ -6,6 +6,9 @@ Data lives in the standard macOS locations:
   and ``partial/`` (in-progress downloads, one folder per job)
 * ``~/Library/Logs/<App>/`` – rotating, redacted log files
 
+On Windows: ``%APPDATA%\\<App>\\`` (database and ``partial\\``) and
+``%LOCALAPPDATA%\\<App>\\Logs\\``.
+
 All locations can be redirected with ``SWIFTDROP_HOME`` (used by tests and the
 self-test so they never touch real user data).
 """
@@ -42,6 +45,11 @@ def default_paths() -> AppPaths:
         root = Path(override).expanduser()
         return AppPaths(data_dir=root / "data", logs_dir=root / "logs", partial_dir=root / "partial")
     home = Path.home()
+    if sys.platform == "win32":
+        roaming = Path(os.environ.get("APPDATA") or home / "AppData" / "Roaming")
+        local = Path(os.environ.get("LOCALAPPDATA") or home / "AppData" / "Local")
+        data = roaming / APP_NAME
+        return AppPaths(data_dir=data, logs_dir=local / APP_NAME / "Logs", partial_dir=data / "partial")
     data = home / "Library" / "Application Support" / APP_NAME
     return AppPaths(
         data_dir=data,

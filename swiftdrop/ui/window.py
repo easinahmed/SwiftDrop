@@ -1,7 +1,8 @@
-"""Creates the native window (WKWebView via pywebview) and runs the UI loop."""
+"""Creates the native window (WKWebView on macOS, WebView2 on Windows, via pywebview) and runs the UI loop."""
 
 from __future__ import annotations
 
+import sys
 from typing import Any
 
 from swiftdrop.appinfo import APP_NAME
@@ -17,15 +18,20 @@ log = get_logger("window")
 
 def _confirm_quit(active: int) -> bool:
     """Native confirmation shown while downloads are running (main thread)."""
+    noun = "download is" if active == 1 else "downloads are"
+    detail = (
+        f"{active} {noun} in progress. They'll be paused and you can resume them the next time you open {APP_NAME}."
+    )
+    if sys.platform == "win32":
+        from swiftdrop.platform.windows import confirm_quit
+
+        return confirm_quit(f"Quit {APP_NAME}?", detail)
     try:
         import AppKit
 
         alert = AppKit.NSAlert.alloc().init()
         alert.setMessageText_(f"Quit {APP_NAME}?")
-        noun = "download is" if active == 1 else "downloads are"
-        alert.setInformativeText_(
-            f"{active} {noun} in progress. They'll be paused and you can resume them the next time you open {APP_NAME}."
-        )
+        alert.setInformativeText_(detail)
         alert.addButtonWithTitle_("Quit")
         alert.addButtonWithTitle_("Cancel")
         return alert.runModal() == AppKit.NSAlertFirstButtonReturn
@@ -37,7 +43,10 @@ def _confirm_quit(active: int) -> bool:
 def run(service: AppService, *, debug: bool = False) -> None:
     import webview
 
-    from swiftdrop.platform.macos import system_prefers_dark
+    if sys.platform == "win32":
+        from swiftdrop.platform.windows import system_prefers_dark
+    else:
+        from swiftdrop.platform.macos import system_prefers_dark
 
     index = web_root() / "index.html"
     if not index.exists():
@@ -51,7 +60,8 @@ def run(service: AppService, *, debug: bool = False) -> None:
     dark = theme == "dark" or (theme == "system" and system_prefers_dark())
     background = "#161618" if dark else "#f4f4f6"
 
-    install_navigation_lock(index.as_uri())
+    if sys.platform == "darwin":
+        install_navigation_lock(index.as_uri())  # Windows relies on the bridge's per-call URL check
     bridge = Bridge(service)
     # Load from file:// rather than a path: pywebview would otherwise start a local HTTP
     # server for the UI (an extra listening socket, and HTTPServer's reverse-DNS lookup

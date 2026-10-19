@@ -1,0 +1,186 @@
+name: Windows installer
+
+on:
+  push:
+    branches: [windows]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Also upload the installer to this existing GitHub release (tag, e.g. v1.0.2). Leave empty to skip."
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # gyan.dev "essentials" FFmpeg build (GPL v3). gyan.dev keeps only recent versions on its own
+  # server; GyanD/codexffmpeg on GitHub keeps every release, so the pinned build is fetched there.
+  FFMPEG_URL: https://github.com/GyanD/codexffmpeg/releases/download/7.1.1/ffmpeg-7.1.1-essentials_build.zip
+  FFMPEG_SHA256: 04861d3339c5ebe38b56c19a15cf2c0cc97f5de4fa8910e4d47e5e6404e4a2d4
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-windows.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Python dependencies
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-windows.txt
+
+      - name: Build the web UI
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          cd frontend
+          npm ci --no-audit --no-fund
+          npm run build
+
+      - name: Provision FFmpeg
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $ProgressPreference = 'SilentlyContinue'
+          $zip = Join-Path $env:RUNNER_TEMP 'ffmpeg.zip'
+          Invoke-WebRequest -Uri $env:FFMPEG_URL -OutFile $zip -MaximumRetryCount 3 -RetryIntervalSec 10
+          $hash = (Get-FileHash -Path $zip -Algorithm SHA256).Hash
+          if ($hash -ne $env:FFMPEG_SHA256) { throw "FFmpeg checksum mismatch: got $hash" }
+          $unpacked = Join-Path $env:RUNNER_TEMP 'ffmpeg'
+          Expand-Archive -Path $zip -DestinationPath $unpacked -Force
+          $build = Get-ChildItem -Path $unpacked -Directory | Select-Object -First 1
+          # swiftdrop/binaries.py and the spec expect the tools here.
+          $bin = 'vendor\bin\windows-x64'
+          New-Item -ItemType Directory -Force -Path $bin | Out-Null
+          Copy-Item -Path (Join-Path $build.FullName 'bin\ffmpeg.exe'), (Join-Path $build.FullName 'bin\ffprobe.exe') -Destination $bin
+          $licenses = 'vendor\licenses\windows'
+          New-Item -ItemType Directory -Force -Path $licenses | Out-Null
+          Copy-Item -Path (Join-Path $build.FullName 'LICENSE') -Destination (Join-Path $licenses 'FFMPEG-LICENSE.txt')
+          Copy-Item -Path (Join-Path $build.FullName 'README.txt') -Destination (Join-Path $licenses 'FFMPEG-README.txt')
+          $version = & (Join-Path $bin 'ffmpeg.exe') -hide_banner -version
+          Write-Host $version[0]
+
+      - name: Bundle with PyInstaller
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          python -m PyInstaller --noconfirm --clean --log-level WARN --distpath dist --workpath build packaging\windows\SwiftDrop-windows.spec
+
+      - name: Self-test the bundled app
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $report = Join-Path $env:RUNNER_TEMP 'selftest-report.txt'
+          $env:SWIFTDROP_SELFTEST_REPORT = $report
+          $exe = (Resolve-Path 'dist\SwiftDrop\SwiftDrop.exe').Path
+          # SwiftDrop.exe is a windowed (GUI) program: PowerShell wouldn't wait for it with "&",
+          # and it has no console output, so wait on the process and read the report file.
+          $proc = Start-Process -FilePath $exe -ArgumentList '--self-test' -PassThru
+          $null = $proc.Handle  # keep the handle so ExitCode is still readable after exit
+          if (-not $proc.WaitForExit(600000)) {
+            Stop-Process -Id $proc.Id -Force
+            throw 'The self-test did not finish within 10 minutes.'
+          }
+          $proc.WaitForExit()
+          $code = $proc.ExitCode
+          if (Test-Path $report) { Get-Content -Path $report } else { Write-Host 'The self-test wrote no report.' }
+          if ($code -ne 0) {
+            Get-ChildItem -Path $env:TEMP -Directory -Filter 'swiftdrop-selftest-*' | ForEach-Object {
+              $log = Join-Path $_.FullName 'logs\swiftdrop.log'
+              if (Test-Path $log) { Write-Host "--- $log"; Get-Content -Path $log -Tail 200 }
+            }
+            throw "The self-test failed (exit code $code)."
+          }
+
+      - name: Read the app version
+        id: version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $version = (python -c "from swiftdrop.appinfo import APP_VERSION; print(APP_VERSION)").Trim()
+          if ($env:REF_TYPE -eq 'tag' -and $env:REF_NAME -ne "v$version") {
+            Write-Host "::warning::Tag $env:REF_NAME doesn't match APP_VERSION $version"
+          }
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Build the installer
+        env:
+          APP_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          function Find-Iscc {
+            $cmd = Get-Command iscc.exe -ErrorAction SilentlyContinue
+            if ($cmd) { return $cmd.Source }
+            foreach ($candidate in @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe")) {
+              if (Test-Path $candidate) { return $candidate }
+            }
+            return $null
+          }
+          function Get-IsccVersion($path) {
+            $info = (Get-Item $path).VersionInfo
+            return [version]::new($info.FileMajorPart, $info.FileMinorPart, $info.FileBuildPart)
+          }
+          $iscc = Find-Iscc
+          if (-not $iscc) {
+            choco install innosetup -y --no-progress
+            $iscc = Find-Iscc
+          } elseif ((Get-IsccVersion $iscc) -lt [version]'6.3.0') {
+            # ArchitecturesAllowed=x64compatible needs Inno Setup 6.3 or later.
+            choco upgrade innosetup -y --no-progress
+            $iscc = Find-Iscc
+          }
+          if (-not $iscc) { throw 'Inno Setup (ISCC.exe) not found.' }
+          Write-Host "Using $iscc ($(Get-IsccVersion $iscc))"
+          & $iscc "/DAppVersion=$env:APP_VERSION" packaging\windows\SwiftDrop.iss
+          Get-Item "dist\SwiftDrop-Setup-$env:APP_VERSION.exe"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SwiftDrop-Setup-${{ steps.version.outputs.version }}
+          path: dist/SwiftDrop-Setup-${{ steps.version.outputs.version }}.exe
+          if-no-files-found: error
+
+      - name: Upload to the GitHub release
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+          INSTALLER: dist/SwiftDrop-Setup-${{ steps.version.outputs.version }}.exe
+        run: |
+          $ErrorActionPreference = 'Stop'
+          gh release view $env:TAG *> $null
+          if ($LASTEXITCODE -ne 0) {
+            throw "GitHub release '$env:TAG' doesn't exist. Create it, then run this workflow again with release_tag=$env:TAG."
+          }
+          gh release upload $env:TAG $env:INSTALLER --clobber
+          if ($LASTEXITCODE -ne 0) { throw "Uploading to release '$env:TAG' failed." }
