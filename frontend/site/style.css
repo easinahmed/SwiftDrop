@@ -81,7 +81,9 @@ h1 { font-size: clamp(36px, 6vw, 60px); letter-spacing: -0.03em; line-height: 1.
 .grid p { margin: 0; color: var(--muted); font-size: 15px; }
 
 .install { padding: 72px 0 24px; text-align: center; }
-.install ol { display: inline-block; text-align: left; margin: 0; padding-left: 22px; color: var(--muted); }
+.install-cols { display: flex; gap: 48px; justify-content: center; flex-wrap: wrap; text-align: left; }
+.install h3 { margin: 0 0 4px; font-size: 18px; }
+.install ol { display: inline-block; max-width: 360px; text-align: left; margin: 0; padding-left: 22px; color: var(--muted); }
 .install li { margin: 8px 0; }
 .install strong { color: var(--text); }
 

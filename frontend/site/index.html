@@ -3,12 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>SwiftDrop — fast media downloader for Mac</title>
+    <title>SwiftDrop — fast media downloader for Mac and Windows</title>
     <meta
       name="description"
-      content="SwiftDrop downloads videos, audio, images and files on your Mac: paste hundreds of links, get 4K that opens in QuickTime, and never watch a download stall at 99%."
+      content="SwiftDrop downloads videos, audio, images and files on your Mac or PC: paste hundreds of links, get 4K that opens in QuickTime, and never watch a download stall at 99%."
     />
-    <meta property="og:title" content="SwiftDrop — fast media downloader for Mac" />
+    <meta property="og:title" content="SwiftDrop — fast media downloader for Mac and Windows" />
     <meta property="og:description" content="Paste links, get files. Multi-connection downloads, QuickTime-ready 4K, resume after a crash." />
     <meta property="og:image" content="/icon-256.png" />
     <link rel="icon" href="/favicon.png" />
@@ -21,7 +21,7 @@
         <a href="#features">Features</a>
         <a href="/demo/">Live demo</a>
         <a href="https://github.com/easinahmed/SwiftDrop" rel="noopener">GitHub</a>
-        <a class="btn btn-small" href="https://github.com/easinahmed/SwiftDrop/releases/download/v1.0.2/SwiftDrop-1.0.2-arm64.dmg">Download</a>
+        <a class="btn btn-small" href="#download">Download</a>
       </nav>
     </header>
 
@@ -30,16 +30,19 @@
         <img class="hero-icon" src="/icon-256.png" alt="SwiftDrop app icon" width="96" height="96" />
         <h1>Downloads that just work.</h1>
         <p class="lead">
-          Paste one link or hundreds. SwiftDrop saves videos, audio, images and files to your Mac — fast, resumable,
+          Paste one link or hundreds. SwiftDrop saves videos, audio, images and files to your Mac or PC — fast, resumable,
           and ready to play.
         </p>
-        <div class="cta">
+        <div class="cta" id="download">
           <a class="btn" href="https://github.com/easinahmed/SwiftDrop/releases/download/v1.0.2/SwiftDrop-1.0.2-arm64.dmg">
             Download for Mac
           </a>
+          <a class="btn" href="https://github.com/easinahmed/SwiftDrop/releases/download/v1.0.2/SwiftDrop-Setup-1.0.2.exe">
+            Download for Windows
+          </a>
           <a class="btn btn-ghost" href="/demo/">Try the live demo</a>
         </div>
-        <p class="meta">Version 1.0.2 · Apple Silicon · macOS 12 or later · Free</p>
+        <p class="meta">Version 1.0.2 · Mac: Apple Silicon, macOS 12+ · Windows 10/11 (64-bit) · Free</p>
       </section>
 
       <section class="window" aria-label="Live demo of the SwiftDrop app">
@@ -82,11 +85,24 @@
 
       <section class="install">
         <h2>Install in a minute</h2>
-        <ol>
-          <li><strong>Download</strong> the DMG.</li>
-          <li><strong>Drag</strong> SwiftDrop into Applications.</li>
-          <li><strong>Right-click → Open</strong> the first time (the app isn't signed with an Apple Developer ID yet).</li>
-        </ol>
+        <div class="install-cols">
+          <div>
+            <h3>Mac</h3>
+            <ol>
+              <li><strong>Download</strong> the DMG.</li>
+              <li><strong>Drag</strong> SwiftDrop into Applications.</li>
+              <li><strong>Right-click → Open</strong> the first time (the app isn't signed with an Apple Developer ID yet).</li>
+            </ol>
+          </div>
+          <div>
+            <h3>Windows</h3>
+            <ol>
+              <li><strong>Download</strong> SwiftDrop-Setup.exe.</li>
+              <li>If SmartScreen appears, click <strong>More info → Run anyway</strong> (the installer isn't code-signed yet).</li>
+              <li><strong>Install</strong> and launch SwiftDrop from the Start menu.</li>
+            </ol>
+          </div>
+        </div>
       </section>
     </main>
 
