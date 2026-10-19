@@ -27,3 +27,6 @@ packaging/generated/
 # Local worktrees and tool folders
 .worktrees/
 .superpowers/
+
+# Static web demo build (Vercel)
+web-dist/

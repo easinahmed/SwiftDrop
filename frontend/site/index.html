@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SwiftDrop — fast media downloader for Mac</title>
+    <meta
+      name="description"
+      content="SwiftDrop downloads videos, audio, images and files on your Mac: paste hundreds of links, get 4K that opens in QuickTime, and never watch a download stall at 99%."
+    />
+    <meta property="og:title" content="SwiftDrop — fast media downloader for Mac" />
+    <meta property="og:description" content="Paste links, get files. Multi-connection downloads, QuickTime-ready 4K, resume after a crash." />
+    <meta property="og:image" content="/icon-256.png" />
+    <link rel="icon" href="/favicon.png" />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header class="nav">
+      <a class="brand" href="/"><img src="/icon-256.png" alt="" width="28" height="28" />SwiftDrop</a>
+      <nav>
+        <a href="#features">Features</a>
+        <a href="/demo/">Live demo</a>
+        <a href="https://github.com/easinahmed/SwiftDrop" rel="noopener">GitHub</a>
+        <a class="btn btn-small" href="https://github.com/easinahmed/SwiftDrop/releases/download/v1.0.2/SwiftDrop-1.0.2-arm64.dmg">Download</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero">
+        <img class="hero-icon" src="/icon-256.png" alt="SwiftDrop app icon" width="96" height="96" />
+        <h1>Downloads that just work.</h1>
+        <p class="lead">
+          Paste one link or hundreds. SwiftDrop saves videos, audio, images and files to your Mac — fast, resumable,
+          and ready to play.
+        </p>
+        <div class="cta">
+          <a class="btn" href="https://github.com/easinahmed/SwiftDrop/releases/download/v1.0.2/SwiftDrop-1.0.2-arm64.dmg">
+            Download for Mac
+          </a>
+          <a class="btn btn-ghost" href="/demo/">Try the live demo</a>
+        </div>
+        <p class="meta">Version 1.0.2 · Apple Silicon · macOS 12 or later · Free</p>
+      </section>
+
+      <section class="window" aria-label="Live demo of the SwiftDrop app">
+        <div class="window-bar"><span></span><span></span><span></span><em>SwiftDrop — live demo</em></div>
+        <div class="window-body" id="frame-box">
+          <iframe id="demo-frame" src="/demo/" title="SwiftDrop live demo" loading="lazy"></iframe>
+        </div>
+        <a class="window-mobile btn btn-ghost" href="/demo/">Open the live demo</a>
+      </section>
+
+      <section id="features" class="features">
+        <h2>Everything a downloader should do</h2>
+        <div class="grid">
+          <article>
+            <h3>Hundreds of links at once</h3>
+            <p>Paste or import a list. Duplicates, broken links and files you already have are caught before anything starts.</p>
+          </article>
+          <article>
+            <h3>4K that opens in QuickTime</h3>
+            <p>MP4 downloads use H.264 or AV1 with AAC audio, and convert with your Mac's media engine when needed.</p>
+          </article>
+          <article>
+            <h3>No more stalls at 99%</h3>
+            <p>Several connections per file, and any connection that slows to a crawl is reopened automatically.</p>
+          </article>
+          <article>
+            <h3>Picks up where it stopped</h3>
+            <p>Pause, quit, even a crash — downloads resume from the bytes already on disk, never from zero.</p>
+          </article>
+          <article>
+            <h3>Video sites and playlists</h3>
+            <p>YouTube, Vimeo, SoundCloud, podcasts and many more public sources, with quality and format choices.</p>
+          </article>
+          <article>
+            <h3>Safe by design</h3>
+            <p>Files are marked as downloaded from the internet, and anything that can run code asks before it opens.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="install">
+        <h2>Install in a minute</h2>
+        <ol>
+          <li><strong>Download</strong> the DMG.</li>
+          <li><strong>Drag</strong> SwiftDrop into Applications.</li>
+          <li><strong>Right-click → Open</strong> the first time (the app isn't signed with an Apple Developer ID yet).</li>
+        </ol>
+      </section>
+    </main>
+
+    <footer>
+      <p class="credit">Developed by Easin Codes</p>
+      <p>
+        <a href="https://github.com/easinahmed/SwiftDrop" rel="noopener">Source on GitHub</a> ·
+        <a href="https://github.com/easinahmed/SwiftDrop/releases" rel="noopener">All releases</a>
+      </p>
+      <p class="fine">Only download media you own or have permission to save.</p>
+    </footer>
+
+    <script>
+      // Scale the embedded app (designed at 1220×780) to the width of its window frame.
+      const box = document.getElementById("frame-box");
+      const frame = document.getElementById("demo-frame");
+      const fit = () => {
+        const scale = Math.min(1, box.clientWidth / 1220);
+        frame.style.transform = `scale(${scale})`;
+        box.style.height = `${Math.round(780 * scale)}px`;
+      };
+      new ResizeObserver(fit).observe(box);
+      fit();
+    </script>
+  </body>
+</html>

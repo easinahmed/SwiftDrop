@@ -36,6 +36,11 @@ let bridgePromise: Promise<Bridge> | null = null;
 function waitForBridge(): Promise<Bridge> {
   if (bridgePromise) return bridgePromise;
   bridgePromise = new Promise((resolve, reject) => {
+    if (__DEMO__) {
+      // The hosted web demo has no engine at all: use the simulated one straight away.
+      import("./mock").then((m) => resolve(m.createMockBridge()));
+      return;
+    }
     const tryResolve = () => {
       const api = window.pywebview?.api;
       if (api && typeof api.get_bootstrap === "function") {

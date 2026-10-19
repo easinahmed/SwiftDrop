@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --noEmit",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build:web": "tsc -b && vite build --mode demo && cp -R site/. ../web-dist/"
   },
   "dependencies": {
     "lucide-react": "1.59.0",

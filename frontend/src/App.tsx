@@ -125,10 +125,24 @@ export default function App() {
     <div className="flex h-full">
       <Sidebar />
       <main className="relative min-w-0 flex-1 bg-bg" key={page}>
-        {isPreviewMode() && (
-          <div className="bg-warning-soft px-8 py-1.5 text-[11.5px] font-medium text-warning">
-            Preview mode — UI running in a browser without the download engine. Nothing is downloaded.
+        {__DEMO__ ? (
+          <div className="bg-accent-soft px-8 py-1.5 text-[11.5px] font-medium text-accent">
+            Live demo — downloads are simulated.{" "}
+            <a
+              className="underline underline-offset-2"
+              href="https://github.com/easinahmed/SwiftDrop/releases/latest"
+              target="_top"
+              rel="noopener"
+            >
+              Get SwiftDrop for Mac
+            </a>
           </div>
+        ) : (
+          isPreviewMode() && (
+            <div className="bg-warning-soft px-8 py-1.5 text-[11.5px] font-medium text-warning">
+              Preview mode — UI running in a browser without the download engine. Nothing is downloaded.
+            </div>
+          )
         )}
         <div className="animate-fade-in h-full">
           {page === "home" && <DownloaderPage />}
