@@ -47,7 +47,7 @@ def service(tmp_path):
     downloads = tmp_path / "Downloads"
     downloads.mkdir()
     svc = AppService(paths, NullPlatform(), enable_sites=False)
-    svc.settings.update({"download_dir": str(downloads)})
+    svc.settings.update({"download_dir": str(downloads), "clipboard_popup": True})  # the opt-in auto pop-up
     svc.start()
     svc.queue.shutdown(timeout=1)  # jobs stay where they are added; the engine isn't under test here
     yield svc

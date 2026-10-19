@@ -10,6 +10,7 @@ from pathlib import Path
 from swiftdrop import handoff
 from swiftdrop.appinfo import APP_NAME, APP_VERSION
 from swiftdrop.handoff import is_scheme_link, parse_scheme_link
+from swiftdrop.hotkey import native_hotkey
 from swiftdrop.logging_setup import configure_logging, get_logger
 from swiftdrop.paths import default_paths
 from swiftdrop.platform import Platform
@@ -102,7 +103,7 @@ def main(argv: list[str] | None = None) -> int:
     from swiftdrop.service import AppService
     from swiftdrop.ui.window import run
 
-    service = AppService(paths, _native_platform(), inbox=True)
+    service = AppService(paths, _native_platform(), inbox=True, hotkey=native_hotkey())
     service.start()
     for link in links:  # shown once the window system runs
         url = parse_scheme_link(link)

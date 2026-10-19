@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
 from typing import Any
 
+from swiftdrop.hotkey import DEFAULT_HOTKEY, ShortcutError, parse_shortcut
 from swiftdrop.models import AUDIO_FORMAT_CHOICES, QUALITY_CHOICES, VIDEO_FORMAT_CHOICES, DownloadOptions
 from swiftdrop.paths import default_download_dir
 from swiftdrop.storage import Database
@@ -43,13 +44,20 @@ class Settings:
     save_history: bool = True
     cookies_from_browser: str = ""
     verbose_logging: bool = False
-    clipboard_popup: bool = True  # pop up a confirm window for copied download links
-    popup_notice_seen: bool = False
+    clipboard_popup: bool = False  # opt-in: pop up a confirm window as soon as a download link is copied
+    hotkey_enabled: bool = True  # copy a link, then press the shortcut to open it in a confirm window
+    hotkey: str = DEFAULT_HOTKEY
+    shortcut_notice_seen: bool = False
 
     @property
     def watch_clipboard(self) -> bool:
-        """The clipboard watcher runs for the pop-up and/or the in-app banner."""
+        """The clipboard watcher only runs for the opt-in auto pop-up and/or the opt-in in-app banner."""
         return self.clipboard_popup or self.clipboard_monitoring
+
+    @property
+    def keeps_running(self) -> bool:
+        """Closing the main window only hides it while the shortcut or the auto pop-up is on."""
+        return self.hotkey_enabled or self.clipboard_popup
 
     def default_options(self) -> DownloadOptions:
         return DownloadOptions(
@@ -91,6 +99,13 @@ def _int(name: str, value: Any, lo: int, hi: int) -> int:
     return value
 
 
+def _hotkey(value: Any) -> str:
+    try:
+        return str(parse_shortcut(value))
+    except ShortcutError as exc:
+        raise SettingsError(str(exc)) from exc
+
+
 def validate_directory(value: Any) -> str:
     if not isinstance(value, str) or not value.strip():
         raise SettingsError("Choose a destination folder.")
@@ -128,8 +143,10 @@ _VALIDATORS: dict[str, Callable[[Any], Any]] = {
     "save_history": lambda v: _bool("Save history", v),
     "cookies_from_browser": lambda v: _choice("Browser sign-in", v, COOKIE_BROWSERS),
     "verbose_logging": lambda v: _bool("Detailed logs", v),
-    "clipboard_popup": lambda v: _bool("Pop up when I copy a download link", v),
-    "popup_notice_seen": lambda v: _bool("Pop-up notice seen", v),
+    "clipboard_popup": lambda v: _bool("Pop up automatically when I copy a download link", v),
+    "hotkey_enabled": lambda v: _bool("Keyboard shortcut", v),
+    "hotkey": _hotkey,
+    "shortcut_notice_seen": lambda v: _bool("Shortcut notice seen", v),
 }
 assert set(_VALIDATORS) == {f.name for f in fields(Settings)}
 

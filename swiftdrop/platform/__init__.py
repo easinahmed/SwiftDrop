@@ -1,4 +1,4 @@
-"""Platform integration (macOS) behind a small interface so the core stays testable."""
+"""Platform integration (macOS, Windows) behind a small interface so the core stays testable."""
 
 from __future__ import annotations
 
@@ -18,6 +18,14 @@ class Platform(Protocol):
     def write_clipboard(self, text: str) -> bool: ...
 
     def notify(self, title: str, body: str) -> None: ...
+
+    def can_notify(self) -> bool:
+        """True when :meth:`notify` shows a real notification (not just a log line)."""
+        ...
+
+    def flash_message(self, text: str) -> None:
+        """A short message on screen for a moment, over any app, without taking focus."""
+        ...
 
     def set_login_item(self, enabled: bool) -> None: ...
 
@@ -40,6 +48,8 @@ class NullPlatform:
         self.clipboard: str | None = None
         self.login_item_calls: list[bool] = []
         self.monitor_callback: Callable[[str], None] | None = None
+        self.notifications_shown = True  # what can_notify() reports
+        self.flashes: list[str] = []
 
     def reveal(self, path: Path) -> bool:
         self.revealed.append(path)
@@ -58,6 +68,12 @@ class NullPlatform:
 
     def notify(self, title: str, body: str) -> None:
         self.notifications.append((title, body))
+
+    def can_notify(self) -> bool:
+        return self.notifications_shown
+
+    def flash_message(self, text: str) -> None:
+        self.flashes.append(text)
 
     def set_login_item(self, enabled: bool) -> None:
         self.login_item_calls.append(enabled)

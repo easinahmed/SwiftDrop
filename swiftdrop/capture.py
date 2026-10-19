@@ -1,12 +1,14 @@
 """Confirm windows for links that arrive from outside the main window.
 
-Links come from the clipboard pop-up (a download or video link was just copied) and from
-``swiftdrop://add?url=…`` links (the "Send to SwiftDrop" bookmark). Nothing here ever
-starts a download on its own: every link is shown in a confirm window first.
+Links come from the keyboard shortcut (the user copied a link and pressed it), from
+``swiftdrop://add?url=…`` links (the "Send to SwiftDrop" bookmark) and from the opt-in
+clipboard pop-up (a download or video link was just copied). Nothing here ever starts a
+download on its own: every link is shown in a confirm window first.
 
 * A direct file link (known file extension) gets a 1-byte ranged probe for its name and
-  size. If the probe fails, a copied link is ignored (it isn't a download after all); a
-  link the user sent on purpose is still shown, named from its URL.
+  size. If the probe fails, a link the pop-up noticed on the clipboard is ignored (it isn't
+  a download after all); a link the user sent on purpose (shortcut, bookmark) is still
+  shown, named from its URL.
 * A video page (a site yt-dlp knows) is shown as is: Start / Start later queue it with
   the default quality.
 * Several links in one copy, or a playlist, open one window offering "Add all", which
@@ -57,7 +59,7 @@ class ConfirmUI(Protocol):
 class PendingCapture:
     id: str
     kind: str  # "file" | "page" | "links"
-    origin: str  # "clipboard" | "link"
+    origin: str  # "clipboard" (auto pop-up) | "hotkey" (keyboard shortcut) | "link" (swiftdrop://)
     urls: list[str]
     provider: str = "direct"
     filename: str = ""
@@ -94,6 +96,7 @@ class CaptureManager:
         self._service = service
         self._lock = threading.Lock()
         self._pending: dict[str, PendingCapture] = {}
+        self._preparing: list[str] = []  # links being checked before their window opens
         self._ui: ConfirmUI | None = None
         self._show_main: Callable[[], None] | None = None
         self._closed = False
@@ -126,9 +129,19 @@ class CaptureManager:
         with self._lock:
             return list(self._pending)
 
+    def waiting_urls(self) -> set[str]:
+        """Links already shown in a confirm window, or about to be."""
+        with self._lock:
+            urls = set(self._preparing)
+            for capture in self._pending.values():
+                urls.update(capture.urls)
+            return urls
+
     # -- offering links (any thread) ------------------------------------------------
     def offer_url(self, url: str, *, origin: str) -> None:
         """Show one link in a confirm window (probing a file link first, off the caller's thread)."""
+        with self._lock:
+            self._preparing.append(url)
         threading.Thread(target=self._prepare_url, args=(url, origin), name="capture-prepare", daemon=True).start()
 
     def offer_links(self, urls: list[str], *, origin: str) -> None:
@@ -138,17 +151,19 @@ class CaptureManager:
     def _prepare_url(self, url: str, origin: str) -> None:
         try:
             capture = self._describe(url, origin)
+            if capture is not None:
+                self._add(capture)
         except Exception:
             log.exception("Could not prepare a link for the confirm window")
-            return
-        if capture is not None:
-            self._add(capture)
+        finally:
+            with self._lock:
+                self._preparing.remove(url)
 
     def _describe(self, url: str, origin: str) -> PendingCapture | None:
         registry = self._service.registry
         link = registry.classify(url)
         if link.blocked:
-            if origin == "link":
+            if origin != "clipboard":
                 self._service.tracker.notice("warning", f"{link.blocked.title}: {link.blocked.message}")
             return None
         if link.provider != "direct":
@@ -170,7 +185,7 @@ class CaptureManager:
         info = self._probe(url)
         if info is None:
             if origin == "clipboard":
-                return None  # copied, but not something we can download: stay quiet
+                return None  # noticed on the clipboard, but not something we can download: stay quiet
             name = choose_filename(url=url, content_disposition=None, content_type=None)
             return PendingCapture(id=new_id(), kind="file", origin=origin, urls=[url], filename=name, media=link.kind)
         name = info.filename or choose_filename(url=url, content_disposition=None, content_type=info.content_type)

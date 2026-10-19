@@ -8,6 +8,7 @@ from typing import Any
 
 from swiftdrop.appinfo import APP_NAME
 from swiftdrop.handoff import parse_scheme_link
+from swiftdrop.hotkey import format_shortcut
 from swiftdrop.logging_setup import get_logger
 from swiftdrop.paths import web_root
 from swiftdrop.service import AppService
@@ -88,8 +89,8 @@ def run(service: AppService, *, debug: bool = False, background: bool = False) -
     quitting = threading.Event()
 
     def keep_running() -> bool:
-        """While the copy pop-up is on, closing the window only hides it."""
-        return bool(service.settings.get().clipboard_popup)
+        """While the keyboard shortcut or the auto pop-up is on, closing the window only hides it."""
+        return service.settings.get().keeps_running
 
     def open_link(link: str) -> None:
         url = parse_scheme_link(link)
@@ -122,10 +123,13 @@ def run(service: AppService, *, debug: bool = False, background: bool = False) -
             threading.Thread(target=window.hide, daemon=True).start()
             if not hidden_notice.is_set():
                 hidden_notice.set()
-                service.platform.notify(
-                    f"{APP_NAME} is still running",
-                    "It pops up when you copy a download link. Open it again to show the window.",
+                settings = service.settings.get()
+                how = (
+                    f"Copy a download link, then press {format_shortcut(settings.hotkey)} to open it."
+                    if settings.hotkey_enabled
+                    else "It pops up when you copy a download link."
                 )
+                service.platform.notify(f"{APP_NAME} is still running", f"{how} Open it again to show the window.")
             return False
         active = service.queue.stats()["active"]
         if active and not _confirm_quit(active):

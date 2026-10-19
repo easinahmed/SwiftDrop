@@ -5,6 +5,7 @@
   password managers; contents are never logged or stored)
 * Notifications: ``UNUserNotificationCenter`` inside the signed .app bundle;
   outside a bundle (development) they are written to the log instead
+* Short on-screen messages: a borderless, non-activating ``NSPanel`` that fades away
 * Open at login: ``SMAppService`` (macOS 13+, installed app only)
 """
 
@@ -39,6 +40,7 @@ _CONCEALED_TYPES = frozenset(
     }
 )
 MAX_CLIPBOARD_CHARS = 200_000
+FLASH_SECONDS = 1.8
 
 
 def run_on_main(fn: Callable[[], Any], timeout: float = 3.0) -> Any:
@@ -74,6 +76,8 @@ class MacPlatform:
         self._notification_center: Any = None
         self._notification_delegate: Any = None
         self._notifications_ready = False
+        self._notifications_allowed = False
+        self._flash_panels: list[Any] = []  # kept alive until they close
 
     # -- Finder -----------------------------------------------------------
     def reveal(self, path: Path) -> bool:
@@ -193,6 +197,7 @@ class MacPlatform:
             options = UN.UNAuthorizationOptionAlert | UN.UNAuthorizationOptionSound
 
             def on_auth(granted: bool, error: Any) -> None:
+                self._notifications_allowed = bool(granted)
                 log.info("Notification permission granted=%s", bool(granted))
 
             center.requestAuthorizationWithOptions_completionHandler_(options, on_auth)
@@ -218,6 +223,32 @@ class MacPlatform:
             self._notification_center.addNotificationRequest_withCompletionHandler_(request, None)
         except Exception:
             log.warning("Could not post notification", exc_info=True)
+
+    def can_notify(self) -> bool:
+        return self._ensure_notifications() and self._notifications_allowed
+
+    def flash_message(self, text: str) -> None:
+        def show() -> None:
+            panel = _flash_panel(text)
+            self._flash_panels.append(panel)
+            panel.orderFrontRegardless()
+
+            def close() -> None:
+                panel.orderOut_(None)
+                if panel in self._flash_panels:
+                    self._flash_panels.remove(panel)
+
+            AppHelper.callLater(FLASH_SECONDS, close)
+
+        if AppKit is None:
+            return
+        try:
+            if threading.current_thread() is threading.main_thread():
+                show()
+            else:
+                AppHelper.callAfter(show)
+        except Exception:
+            log.warning("Could not show a message", exc_info=True)
 
     # -- Login item -------------------------------------------------------
     def login_item_supported(self) -> bool:
@@ -259,6 +290,45 @@ class MacPlatform:
             run_on_main(apply)
         except Exception:
             log.debug("Could not set appearance", exc_info=True)
+
+
+def _flash_panel(text: str) -> Any:
+    """A small HUD near the top of the screen in use; it ignores the mouse and never takes focus."""
+    label = AppKit.NSTextField.labelWithString_(text)
+    label.setFont_(AppKit.NSFont.systemFontOfSize_weight_(14, AppKit.NSFontWeightMedium))
+    label.setTextColor_(AppKit.NSColor.labelColor())
+    label.sizeToFit()
+    text_size = label.frame().size
+    width, height = max(220.0, text_size.width + 48), 46.0
+    screen = AppKit.NSScreen.mainScreen() or AppKit.NSScreen.screens()[0]
+    visible = screen.visibleFrame()
+    x = visible.origin.x + (visible.size.width - width) / 2
+    y = visible.origin.y + visible.size.height - height - 64
+    style = AppKit.NSWindowStyleMaskBorderless | AppKit.NSWindowStyleMaskNonactivatingPanel
+    panel = AppKit.NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
+        Foundation.NSMakeRect(x, y, width, height), style, AppKit.NSBackingStoreBuffered, False
+    )
+    panel.setReleasedWhenClosed_(False)
+    panel.setLevel_(AppKit.NSStatusWindowLevel)
+    panel.setOpaque_(False)
+    panel.setBackgroundColor_(AppKit.NSColor.clearColor())
+    panel.setHasShadow_(True)
+    panel.setIgnoresMouseEvents_(True)
+    panel.setHidesOnDeactivate_(False)
+    panel.setCollectionBehavior_(
+        AppKit.NSWindowCollectionBehaviorCanJoinAllSpaces | AppKit.NSWindowCollectionBehaviorFullScreenAuxiliary
+    )
+    background = AppKit.NSVisualEffectView.alloc().initWithFrame_(Foundation.NSMakeRect(0, 0, width, height))
+    background.setMaterial_(AppKit.NSVisualEffectMaterialHUDWindow)
+    background.setBlendingMode_(AppKit.NSVisualEffectBlendingModeBehindWindow)
+    background.setState_(AppKit.NSVisualEffectStateActive)
+    background.setWantsLayer_(True)
+    background.layer().setCornerRadius_(12.0)
+    background.layer().setMasksToBounds_(True)
+    label.setFrameOrigin_(((width - text_size.width) / 2, (height - text_size.height) / 2))
+    background.addSubview_(label)
+    panel.setContentView_(background)
+    return panel
 
 
 def system_prefers_dark() -> bool:

@@ -39,8 +39,11 @@ const settings: Settings = {
   save_history: true,
   cookies_from_browser: "",
   verbose_logging: false,
-  clipboard_popup: true,
-  popup_notice_seen: false,
+  clipboard_popup: false,
+  hotkey_enabled: true,
+  hotkey: "ctrl+alt+d",
+  shortcut_notice_seen: false,
+  hotkey_error: null,
 };
 
 const capabilities = {

@@ -68,10 +68,10 @@ attached to that GitHub release.
 | **Downloads** | Every job with live progress, speed, ETA and size. Pause/resume/cancel/retry per item, for a selection, or for the whole queue (*Pause all*, *Resume all*, *Retry failed*, *Clear completed*). Export results (CSV) or failed links (TXT). |
 | **Playlists** | Playlists, albums, channels and feeds grouped into collections with overall progress. Pick individual items before downloading; unavailable items are skipped and items already downloaded aren't fetched again. |
 | **History** | Searchable, filterable list of past downloads with *Open*, *Show in Finder* and *Copy link*. Clearing history never deletes files. |
-| **Pop-up** | Copy a download or video link anywhere and SwiftDrop pops up a small window to name it, pick a folder and **Start**, **Start later** or **Cancel**; several links at once go to New Download with **Add all**. The **Send to SwiftDrop** bookmark (Settings) sends the page you're on. While the pop-up is on, closing the window keeps SwiftDrop running (in the Dock on Mac; open it again to show it on Windows). |
-| **Settings** | Destination, simultaneous downloads, bandwidth limit, default quality/format, theme, notifications, the copy pop-up, an opt-in in-app banner for other copied links, resume-on-launch, open-at-login, browser sign-in, partial-file cleanup, diagnostics. |
+| **Pop-up** | Copy a download or video link anywhere, then press **⌃⌥D** (**Ctrl+Alt+D** on Windows): SwiftDrop opens a small window to name it, pick a folder and **Start**, **Start later** or **Cancel**; several links at once go to New Download with **Add all**. With no download link on the clipboard you get a short "No link copied" message instead. The shortcut works with SwiftDrop's window hidden and can be changed or turned off in Settings. The **Send to SwiftDrop** bookmark (Settings) sends the page you're on. Copying alone does nothing unless you turn on **Pop up automatically when I copy a download link** (off by default). While the shortcut or the automatic pop-up is on, closing the window keeps SwiftDrop running (in the Dock on Mac; open it again to show it on Windows). |
+| **Settings** | Destination, simultaneous downloads, bandwidth limit, default quality/format, theme, notifications, the keyboard shortcut, the opt-in automatic pop-up, an opt-in in-app banner for other copied links, resume-on-launch, open-at-login, browser sign-in, partial-file cleanup, diagnostics. |
 
-Keyboard: `⌘1`–`⌘4` switch sections, `⌘,` opens Settings, and `⌘↩` adds links or starts the download.
+Keyboard: `⌘1`–`⌘4` switch sections, `⌘,` opens Settings, and `⌘↩` adds links or starts the download. From any app, `⌃⌥D` (`Ctrl+Alt+D` on Windows) opens the link you just copied.
 
 Where files go:
 - Finished downloads go to `~/Downloads` by default, or the folder you pick, optionally sorted into
@@ -128,7 +128,8 @@ service.py (AppService façade)
    ├── queue.py        FIFO scheduler, ≤N worker threads, pause/resume/cancel/retry, persistence
    │     └── providers/registry.py → direct.py (engine/http.py) | ytdlp.py (yt-dlp + FFmpeg)
    ├── history.py, settings.py, storage.py (SQLite, WAL)
-   └── platform/macos.py  Finder, clipboard, notifications, login item (PyObjC)
+   ├── platform/macos.py  Finder, clipboard, notifications, login item (PyObjC)
+   └── hotkey.py       the copy-then-press shortcut → platform/hotkey_macos.py (Carbon) | hotkey_windows.py
 ```
 
 | Module | Responsibility |
@@ -154,7 +155,7 @@ marked as missing and can be retried.
 | Restricted, validated preload API | Every argument is type- and size-checked in `ui/bridge.py`. Ids must match `[0-9a-f]{16}`. Errors return a message, never a traceback. |
 | No arbitrary paths/commands from renderer | Open and reveal take a job or history id, and the path comes from SwiftDrop's records. Destinations must be the saved default, `~/Downloads`, or a folder picked in the native dialog. No shell is ever invoked, and helper tools get fixed argument lists. |
 | CSP / no remote code | `index.html` CSP: scripts only from the bundle (`'unsafe-eval'` is required by pywebview's own bridge). All data is rendered as text (ESLint forbids `dangerouslySetInnerHTML`). The UI loads from `file://`, so no local HTTP server is started. |
-| Secrets | No passwords are requested or stored. Browser cookies are read per download only. Logs are redacted. Clipboard watching runs for the copy pop-up (on by default, one switch to turn it off): only download and video links trigger it, contents are never stored, and copies made inside SwiftDrop or marked concealed by password managers are skipped. Links from the clipboard or `swiftdrop://` are always shown for confirmation, never started on their own. |
+| Secrets | No passwords are requested or stored. Browser cookies are read per download only. Logs are redacted. The clipboard is read when you press the shortcut. It is only watched if you turn on the automatic pop-up or the in-app banner (both off by default): only download and video links trigger the pop-up, contents are never stored, and copies made inside SwiftDrop or marked concealed by password managers are skipped. The shortcut is a Carbon hot key on macOS, so it needs no Accessibility permission. Links from the clipboard or `swiftdrop://` are always shown for confirmation, never started on their own. |
 
 ---
 

@@ -4,7 +4,8 @@ Lets developers and CI capture real WKWebView screenshots and drive the UI
 without macOS screen-recording permission:
 
 * ``<dir>/<name>.js``   → evaluated in the page; result written to ``<name>.out.json``
-* ``<dir>/<name>.snap`` → page snapshot written to ``<name>.png``
+* ``<dir>/<name>.snap`` → page snapshot written to ``<name>.png``; a name starting with
+  ``capture`` snapshots the newest confirm window instead of the main window
 
 The variable is only read from the process environment, so it carries no more
 privilege than the user launching the app.
@@ -73,6 +74,13 @@ def _snapshot(window: Any, target: Path) -> None:
     done.wait(10)
 
 
+def _newest_other_window(main: Any) -> Any:
+    import webview
+
+    others = [w for w in webview.windows if w is not main]
+    return others[-1] if others else None
+
+
 def install(window: Any) -> None:
     qa_dir = os.environ.get("SWIFTDROP_QA_DIR")
     if not qa_dir:
@@ -97,11 +105,15 @@ def install(window: Any) -> None:
                         request.with_suffix(".out.json").write_text(json.dumps(payload, default=str))
                     elif request.suffix == ".snap":
                         request.unlink()
+                        target = _newest_other_window(window) if request.stem.startswith("capture") else window
+                        if target is None:
+                            log.warning("QA request %s: no confirm window is open", request.name)
+                            continue
                         # WebKit freezes transitions in occluded windows; disable motion so
                         # snapshots show the settled UI rather than a frame mid-transition.
-                        window.evaluate_js(_NO_MOTION_JS)
+                        target.evaluate_js(_NO_MOTION_JS)
                         time.sleep(0.15)
-                        _snapshot(window, request.with_suffix(".png"))
+                        _snapshot(target, request.with_suffix(".png"))
                 except FileNotFoundError:
                     continue
                 except Exception:

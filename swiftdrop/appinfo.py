@@ -8,7 +8,7 @@ in one place. The Python package itself stays ``swiftdrop``.
 from __future__ import annotations
 
 APP_NAME = "SwiftDrop"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.1"
 APP_CREDIT = "Developed by Easin Codes"
 # Reverse-DNS identifier used for the .app bundle, notifications and login items.
 # Replace with an identifier from a domain you control before distributing.

@@ -1,7 +1,8 @@
 import { useEffect } from "react";
-import { AlertTriangle, ClipboardCheck, Loader2, MousePointerClick, X } from "lucide-react";
+import { AlertTriangle, ClipboardCheck, Keyboard, Loader2, X } from "lucide-react";
 import { api, isPreviewMode } from "./lib/api";
 import { pluralize } from "./lib/format";
+import { formatShortcut } from "./lib/shortcut";
 import { errorMessage, useStore, type Page } from "./lib/store";
 import { Sidebar, AppMark } from "./components/Sidebar";
 import { OpenConfirmDialog, Toasts } from "./components/overlay";
@@ -69,18 +70,19 @@ function ClipboardBanner() {
   );
 }
 
-/** Shown once: the copy pop-up is on by default, so say what it does and how to turn it off. */
-function PopupNotice() {
+/** Shown once: how to open a copied link in SwiftDrop (copying alone does nothing unless the auto pop-up is on). */
+function ShortcutNotice() {
   const settings = useStore((s) => s.settings);
+  const capabilities = useStore((s) => s.capabilities);
   const setSettings = useStore((s) => s.setSettings);
+  const setPage = useStore((s) => s.setPage);
   const toast = useStore((s) => s.toast);
-  if (!settings || settings.popup_notice_seen || !settings.clipboard_popup) return null;
-  const answer = async (turnOff: boolean) => {
+  if (!settings || settings.shortcut_notice_seen) return null;
+  const mac = capabilities?.platform !== "windows";
+  const answer = async (openSettings: boolean) => {
     try {
-      setSettings(
-        await api.updateSettings(turnOff ? { popup_notice_seen: true, clipboard_popup: false } : { popup_notice_seen: true }),
-      );
-      if (turnOff) toast("info", "Pop-up turned off. You can turn it back on in Settings.");
+      setSettings(await api.updateSettings({ shortcut_notice_seen: true }));
+      if (openSettings) setPage("settings");
     } catch (error) {
       toast("error", errorMessage(error));
     }
@@ -92,16 +94,24 @@ function PopupNotice() {
     >
       <div className="flex items-start gap-3">
         <div className="flex size-8 shrink-0 items-center justify-center rounded-[9px] bg-accent-soft text-accent-ink">
-          <MousePointerClick className="size-4" />
+          <Keyboard className="size-4" />
         </div>
-        <p className="text-[12.5px] leading-[1.5] text-ink-2">
-          <span className="font-semibold text-ink">SwiftDrop pops up when you copy a download link.</span> Only download and
-          video links trigger it; nothing you copy is saved.
-        </p>
+        {settings.hotkey_enabled ? (
+          <p className="text-[12.5px] leading-[1.5] text-ink-2">
+            Copy a download link, then press{" "}
+            <kbd className="font-semibold text-ink">{formatShortcut(settings.hotkey, mac)}</kbd> to open it in SwiftDrop
+            — or use the Send to SwiftDrop bookmark from Settings.
+          </p>
+        ) : (
+          <p className="text-[12.5px] leading-[1.5] text-ink-2">
+            Open download links from any app with a keyboard shortcut or the Send to SwiftDrop bookmark — both are in
+            Settings.
+          </p>
+        )}
       </div>
       <div className="mt-3 flex justify-end gap-2">
         <Button size="sm" variant="ghost" onClick={() => answer(true)}>
-          Turn off
+          Settings
         </Button>
         <Button size="sm" variant="primary" onClick={() => answer(false)}>
           Got it
@@ -195,7 +205,7 @@ export default function App() {
         </div>
       </main>
       <ClipboardBanner />
-      <PopupNotice />
+      <ShortcutNotice />
       <Toasts />
       <OpenConfirmDialog />
     </div>

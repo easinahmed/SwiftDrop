@@ -13,8 +13,17 @@ import type {
   Theme,
   VideoFormat,
 } from "../lib/types";
-import { Badge, Button, PageHeader, Segmented, Select, Toggle } from "../components/ui";
+import { Badge, Button, Checkbox, PageHeader, Segmented, Select, Toggle } from "../components/ui";
 import { BOOKMARKLET, Bookmarklet } from "../components/Bookmarklet";
+import {
+  composeShortcut,
+  formatShortcut,
+  modifierName,
+  parseShortcut,
+  platformModifiers,
+  SHORTCUT_KEYS,
+  type Modifier,
+} from "../lib/shortcut";
 
 function Section({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
   return (
@@ -63,6 +72,42 @@ function BandwidthInput({ value, onCommit }: { value: number; onCommit: (kbps: n
   );
 }
 
+function ShortcutPicker({
+  value,
+  mac,
+  onChange,
+}: {
+  value: string;
+  mac: boolean;
+  onChange: (shortcut: string) => void;
+}) {
+  const shortcut = parseShortcut(value);
+  const toggle = (modifier: Modifier, on: boolean) => {
+    const modifiers = on ? [...shortcut.modifiers, modifier] : shortcut.modifiers.filter((m) => m !== modifier);
+    onChange(composeShortcut({ ...shortcut, modifiers }));
+  };
+  return (
+    <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-2">
+      {platformModifiers(mac).map((modifier) => {
+        const name = modifierName(modifier, mac);
+        return (
+          <label key={modifier} className="flex items-center gap-1.5 text-[12.5px] text-ink-2">
+            <Checkbox label={name} checked={shortcut.modifiers.includes(modifier)} onChange={(on) => toggle(modifier, on)} />
+            {name}
+          </label>
+        );
+      })}
+      <Select
+        label="Shortcut key"
+        value={shortcut.key}
+        onChange={(key) => onChange(composeShortcut({ ...shortcut, key }))}
+        options={SHORTCUT_KEYS.map((key) => ({ value: key, label: key }))}
+        className="w-[64px]"
+      />
+    </div>
+  );
+}
+
 function PopupSection({
   settings,
   capabilities,
@@ -74,6 +119,7 @@ function PopupSection({
 }) {
   const toast = useStore((s) => s.toast);
   const windows = capabilities?.platform === "windows";
+  const background = windows ? "in the background (open SwiftDrop again to show it)" : "in the Dock";
 
   const copyBookmark = async () => {
     try {
@@ -93,18 +139,29 @@ function PopupSection({
   };
 
   return (
-    <Section title="Pop-up" description="Download from any app or browser without opening SwiftDrop first.">
+    <Section title="Open links from anywhere" description="Download from any app or browser without opening SwiftDrop first.">
       <Row
-        label="Pop up when I copy a download link"
-        description={`Only download and video links trigger it; nothing you copy is saved. While on, closing the window keeps SwiftDrop running ${
-          windows ? "in the background (open SwiftDrop again to show it)" : "in the Dock"
-        }.`}
+        label="Keyboard shortcut — copy a link, then press it to open SwiftDrop"
+        description={
+          <>
+            {`Press ${formatShortcut(settings.hotkey, !windows)} after copying a download or video link. While on, closing the window keeps SwiftDrop running ${background}.`}
+            {settings.hotkey_error && (
+              <span role="alert" className="mt-1 block font-medium text-danger">
+                {settings.hotkey_error}. Choose another shortcut.
+              </span>
+            )}
+          </>
+        }
       >
         <Toggle
-          label="Pop up when I copy a download link"
-          checked={settings.clipboard_popup}
-          onChange={(v) => update({ clipboard_popup: v })}
+          label="Keyboard shortcut"
+          checked={settings.hotkey_enabled}
+          onChange={(v) => update({ hotkey_enabled: v })}
         />
+      </Row>
+      <Row label="Shortcut" description="Choose one or more modifier keys and a letter or digit.">
+        {/* Picking a shortcut turns it on, so a shortcut another app uses can be replaced in one step. */}
+        <ShortcutPicker value={settings.hotkey} mac={!windows} onChange={(hotkey) => update({ hotkey, hotkey_enabled: true })} />
       </Row>
       <Row
         label="Send to SwiftDrop"
@@ -115,8 +172,18 @@ function PopupSection({
           Copy
         </Button>
       </Row>
+      <Row
+        label="Pop up automatically when I copy a download link (off by default)"
+        description={`Only download and video links trigger it; nothing you copy is saved. While on, closing the window keeps SwiftDrop running ${background}.`}
+      >
+        <Toggle
+          label="Pop up automatically when I copy a download link"
+          checked={settings.clipboard_popup}
+          onChange={(v) => update({ clipboard_popup: v })}
+        />
+      </Row>
       {windows && (
-        <Row label="Quit SwiftDrop" description="Stops the pop-up and pauses running downloads until you open SwiftDrop again.">
+        <Row label="Quit SwiftDrop" description="Stops the shortcut and the pop-up, and pauses running downloads until you open SwiftDrop again.">
           <Button size="sm" onClick={quit}>
             Quit
           </Button>

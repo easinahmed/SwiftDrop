@@ -163,8 +163,15 @@ export interface Settings {
   save_history: boolean;
   cookies_from_browser: string;
   verbose_logging: boolean;
+  /** Opt-in: pop up as soon as a download link is copied. */
   clipboard_popup: boolean;
-  popup_notice_seen: boolean;
+  /** Copy a link, then press the shortcut to open it in SwiftDrop. */
+  hotkey_enabled: boolean;
+  /** e.g. "ctrl+alt+d" */
+  hotkey: string;
+  shortcut_notice_seen: boolean;
+  /** Read only: why the shortcut was turned off (another app uses it). */
+  hotkey_error?: string | null;
 }
 
 export interface Stats {
@@ -273,7 +280,7 @@ export interface CaptureInfo {
   id: string;
   /** file: a direct download; page: a video page; links: several links (or a playlist). */
   kind: "file" | "page" | "links";
-  origin: "clipboard" | "link";
+  origin: "clipboard" | "hotkey" | "link";
   url: string;
   urls: string[];
   count: number;

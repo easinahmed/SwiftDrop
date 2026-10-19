@@ -222,7 +222,7 @@ class Bridge:
         if changes.removed_preview:
             payload["removed_preview"] = sorted(changes.removed_preview)
         if changes.settings:
-            payload["settings"] = service.settings.get().to_dict()
+            payload["settings"] = service.settings_public()
         if changes.history:
             payload["history_changed"] = True
         if changes.clipboard is not None:
@@ -381,7 +381,7 @@ class Bridge:
 
         @endpoint_
         def get_settings() -> dict[str, Any]:
-            return service.settings.get().to_dict()
+            return service.settings_public()
 
         @endpoint_
         def update_settings(patch: Any) -> dict[str, Any]:

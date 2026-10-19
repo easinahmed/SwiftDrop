@@ -4,6 +4,7 @@
 * Clipboard: Win32 ``CF_UNICODETEXT``; content marked by password managers with
   ``ExcludeClipboardContentFromMonitorProcessing`` is ignored, never logged or stored
 * Notifications are written to the log; "Open at login" is not available yet
+* Short on-screen messages: a small topmost ``STATIC`` window that never takes focus
 
 Every Win32 call sits behind ``sys.platform == "win32"`` so the module imports (and
 type-checks) on macOS too.
@@ -247,6 +248,13 @@ class WindowsPlatform:
     def notify(self, title: str, body: str) -> None:
         log.info("Notification: %s — %s", title, body)
 
+    def can_notify(self) -> bool:
+        return False
+
+    def flash_message(self, text: str) -> None:
+        if sys.platform == "win32":
+            threading.Thread(target=_flash, args=(text,), name="flash-message", daemon=True).start()
+
     # -- Login item -------------------------------------------------------
     def login_item_supported(self) -> bool:
         return False
@@ -257,6 +265,95 @@ class WindowsPlatform:
     # -- Appearance -------------------------------------------------------
     def set_appearance(self, theme: str) -> None:
         pass  # the web UI follows the theme setting itself
+
+
+def _flash(text: str, seconds: float = 1.8) -> None:
+    """Show ``text`` in a small borderless window at the top of the screen, then remove it.
+
+    The window belongs to this thread, which pumps its messages (so it paints) until it is
+    destroyed. ``WS_EX_NOACTIVATE`` keeps the focus in the app the user is working in.
+    """
+    if sys.platform != "win32":
+        return
+    from ctypes import wintypes
+
+    ws_popup, ws_border = 0x80000000, 0x00800000
+    ss_center, ss_centerimage = 0x0001, 0x0200
+    ws_ex_topmost, ws_ex_toolwindow, ws_ex_noactivate = 0x00000008, 0x00000080, 0x08000000
+    sw_shownoactivate, wm_setfont, pm_remove, default_gui_font = 4, 0x0030, 0x0001, 17
+    try:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
+        user32.CreateWindowExW.argtypes = [
+            wintypes.DWORD,
+            wintypes.LPCWSTR,
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            wintypes.HWND,
+            wintypes.HMENU,
+            wintypes.HINSTANCE,
+            wintypes.LPVOID,
+        ]
+        user32.CreateWindowExW.restype = wintypes.HWND
+        user32.GetSystemMetrics.argtypes = [ctypes.c_int]
+        user32.GetSystemMetrics.restype = ctypes.c_int
+        user32.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        user32.SendMessageW.restype = wintypes.LPARAM
+        user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+        user32.UpdateWindow.argtypes = [wintypes.HWND]
+        user32.PeekMessageW.argtypes = [
+            ctypes.POINTER(wintypes.MSG),
+            wintypes.HWND,
+            wintypes.UINT,
+            wintypes.UINT,
+            wintypes.UINT,
+        ]
+        user32.PeekMessageW.restype = wintypes.BOOL
+        user32.TranslateMessage.argtypes = [ctypes.POINTER(wintypes.MSG)]
+        user32.DispatchMessageW.argtypes = [ctypes.POINTER(wintypes.MSG)]
+        user32.DispatchMessageW.restype = wintypes.LPARAM
+        user32.DestroyWindow.argtypes = [wintypes.HWND]
+        gdi32.GetStockObject.argtypes = [ctypes.c_int]
+        gdi32.GetStockObject.restype = wintypes.HGDIOBJ
+        width, height = 320, 44
+        x = (user32.GetSystemMetrics(0) - width) // 2  # SM_CXSCREEN
+        hwnd = user32.CreateWindowExW(
+            ws_ex_topmost | ws_ex_toolwindow | ws_ex_noactivate,
+            "STATIC",
+            text,
+            ws_popup | ws_border | ss_center | ss_centerimage,
+            x,
+            72,
+            width,
+            height,
+            None,
+            None,
+            None,
+            None,
+        )
+        if not hwnd:
+            return
+        try:
+            font = gdi32.GetStockObject(default_gui_font)
+            if font:
+                user32.SendMessageW(hwnd, wm_setfont, font, 1)
+            user32.ShowWindow(hwnd, sw_shownoactivate)
+            user32.UpdateWindow(hwnd)
+            msg = wintypes.MSG()
+            deadline = time.monotonic() + seconds
+            while time.monotonic() < deadline:
+                while user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, pm_remove):
+                    user32.TranslateMessage(ctypes.byref(msg))
+                    user32.DispatchMessageW(ctypes.byref(msg))
+                time.sleep(0.03)
+        finally:
+            user32.DestroyWindow(hwnd)
+    except Exception:
+        log.debug("Could not show a message", exc_info=True)
 
 
 def system_prefers_dark() -> bool:

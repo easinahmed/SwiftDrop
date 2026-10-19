@@ -27,6 +27,7 @@ from swiftdrop.engine.segmented import SegmentedDownloader
 from swiftdrop.events import ChangeTracker
 from swiftdrop.handoff import InboxWatcher
 from swiftdrop.history import HISTORY_KINDS, HISTORY_STATUSES, HistoryStore
+from swiftdrop.hotkey import GlobalHotkey, format_shortcut
 from swiftdrop.logging_setup import get_logger, set_verbose
 from swiftdrop.models import Collection, DownloadOptions, Job, JobState, MediaKind
 from swiftdrop.paths import AppPaths, is_frozen
@@ -44,6 +45,7 @@ from swiftdrop.urls import InvalidUrlError, ParsedUrl, dedupe_key, display_domai
 log = get_logger("service")
 
 MAX_SITE_CHECKS = 10  # full yt-dlp site matching is slow; only for copies with a few unknown links
+HOTKEY_IN_USE = "That shortcut is in use by another app"
 
 
 class ServiceError(ValueError):
@@ -70,6 +72,7 @@ class AppService:
         *,
         enable_sites: bool = True,
         inbox: bool = False,
+        hotkey: GlobalHotkey | None = None,
     ) -> None:
         self.paths = paths.ensure()
         self.platform: Platform = platform or NullPlatform()
@@ -106,6 +109,12 @@ class AppService:
         self.capture = CaptureManager(self)
         # Requests from later launches of the app (show the window, a swiftdrop:// link).
         self._inbox = InboxWatcher(paths.data_dir, self.handle_message) if inbox else None
+        # The keyboard shortcut (registered with the OS while the setting is on).
+        self._hotkey = hotkey
+        self._hotkey_lock = threading.Lock()
+        self._hotkey_registered: str | None = None
+        self._hotkey_press = threading.Lock()  # one press handled at a time
+        self.hotkey_error: str | None = None
         self._started = False
         self._shutdown_lock = threading.Lock()
         self._shut_down = False
@@ -122,8 +131,9 @@ class AppService:
         warm_up = getattr(self.registry.sites, "warm_up", None)
         if warm_up is not None:
             threading.Thread(target=warm_up, name="sites-warm-up", daemon=True).start()
-        if self.settings.get().watch_clipboard:
+        if self.settings.get().watch_clipboard:  # only for the opt-in pop-up or banner
             self.platform.start_clipboard_monitor(self.clipboard_detected)
+        self._apply_hotkey()
         if self._inbox is not None:
             self._inbox.start()
         log.info("%s %s started (frozen=%s)", APP_NAME, APP_VERSION, is_frozen())
@@ -138,6 +148,7 @@ class AppService:
         try:
             if self._inbox is not None:
                 self._inbox.stop()
+            self._stop_hotkey()
             self.capture.shutdown()
             self.platform.stop_clipboard_monitor()
             self.preview.stop()
@@ -152,7 +163,7 @@ class AppService:
     def bootstrap(self) -> dict[str, Any]:
         return {
             "app": {"name": APP_NAME, "version": APP_VERSION, "bundle_id": BUNDLE_ID, "frozen": is_frozen()},
-            "settings": self.settings.get().to_dict(),
+            "settings": self.settings_public(),
             "jobs": self.queue.jobs_public(),
             "collections": self.queue.collections_public(),
             "preview": self.preview.items_public(),
@@ -414,6 +425,10 @@ class AppService:
         raise ServiceError("Unknown export.")
 
     # -- settings ---------------------------------------------------------------
+    def settings_public(self) -> dict[str, Any]:
+        """The settings, plus why the keyboard shortcut was turned off (if it was)."""
+        return {**self.settings.get().to_dict(), "hotkey_error": self.hotkey_error}
+
     def update_settings(self, patch: dict[str, Any]) -> dict[str, Any]:
         before = self.settings.get()
         try:
@@ -444,16 +459,91 @@ class AppService:
             set_verbose(after.verbose_logging)
         if after.theme != before.theme:
             self.platform.set_appearance(after.theme)
+        if "hotkey" in clean or "hotkey_enabled" in clean:
+            self._apply_hotkey()
         self.tracker.settings()
-        return after.to_dict()
+        return self.settings_public()
+
+    # -- keyboard shortcut ----------------------------------------------------------
+    def _apply_hotkey(self) -> None:
+        """Register the shortcut the settings ask for; if the OS refuses it, turn the setting off."""
+        if self._hotkey is None:
+            return
+        with self._hotkey_lock:
+            settings = self.settings.get()
+            wanted = settings.hotkey if settings.hotkey_enabled else None
+            if wanted is None:
+                self.hotkey_error = None
+            if wanted == self._hotkey_registered:
+                return
+            if self._hotkey_registered is not None:
+                self._hotkey.stop()
+                self._hotkey_registered = None
+            if wanted is None:
+                return
+            if self._hotkey.start(wanted, self.hotkey_pressed):
+                self._hotkey_registered = wanted
+                self.hotkey_error = None
+                return
+            log.warning("The keyboard shortcut %s is in use by another app; turning it off", wanted)
+            self.hotkey_error = HOTKEY_IN_USE
+            self.settings.update({"hotkey_enabled": False})
+        self.tracker.settings()
+
+    def _stop_hotkey(self) -> None:
+        with self._hotkey_lock:
+            if self._hotkey is not None and self._hotkey_registered is not None:
+                self._hotkey.stop()
+            self._hotkey_registered = None
+
+    def hotkey_pressed(self) -> None:
+        """The keyboard shortcut (worker thread): show the download links on the clipboard.
+
+        Uses the same confirm windows as the auto pop-up. Unlike it, a press always answers:
+        links already pressed for before are shown again, and with nothing to show the user
+        gets a short message rather than an empty window.
+        """
+        if not self._hotkey_press.acquire(blocking=False):
+            return  # still handling the previous press
+        try:
+            try:
+                text = self.platform.read_clipboard()
+            except Exception:
+                log.debug("Could not read the clipboard", exc_info=True)
+                text = None
+            offered = self._downloadable(parse_url_list(text).urls) if text else []
+            if not offered:
+                shortcut = format_shortcut(self.settings.get().hotkey)
+                self._tell("No link copied", f"Copy a download or video link, then press {shortcut}.")
+                return
+            waiting = self.capture.waiting_urls()
+            fresh = [p for p in offered if p.url not in waiting]
+            if not fresh:
+                return  # its confirm window is already open
+            active = self.queue.active_keys()
+            new = [p for p in fresh if p.key not in active]
+            if not new:
+                self._tell("Already in your downloads", "That link is already in SwiftDrop's download list.")
+                return
+            self._offer_popup(new, origin="hotkey")
+        finally:
+            self._hotkey_press.release()
+
+    def _tell(self, title: str, body: str) -> None:
+        """A heads-up when the window can't help: a notification, else a short message on screen."""
+        log.info("%s", title)
+        if self.settings.get().notifications and self.platform.can_notify():
+            self.platform.notify(title, body)
+        else:
+            self.platform.flash_message(title)
 
     # -- clipboard ----------------------------------------------------------------
     def clipboard_detected(self, text: str) -> None:
-        """Called by the clipboard watcher; only links are considered and nothing is stored.
+        """Called by the clipboard watcher (opt-in); only links are considered and nothing is stored.
 
-        Download and video links open the pop-up (once per link per session); other links
-        are offered in the in-app banner when "Watch clipboard for links" is on. The
-        platform watchers already ignore copies made inside SwiftDrop.
+        With the auto pop-up on, download and video links open it (once per link per session);
+        other links are offered in the in-app banner when that is on. The platform watchers
+        already ignore copies made inside SwiftDrop.
         """
         settings = self.settings.get()
         result = parse_url_list(text)
@@ -464,11 +554,7 @@ class AppService:
             active = self.queue.active_keys()
             offered = self._downloadable([p for p in remaining if p.key not in active])
             if offered:
-                self._popup_seen.update(p.key for p in offered)
-                if len(offered) == 1:
-                    self.capture.offer_url(offered[0].url, origin="clipboard")
-                else:
-                    self.capture.offer_links([p.url for p in offered], origin="clipboard")
+                self._offer_popup(offered, origin="clipboard")
                 remaining = [p for p in remaining if p.key not in self._popup_seen]
         if not settings.clipboard_monitoring:
             return
@@ -485,6 +571,14 @@ class AppService:
                 "at": time.time(),
             }
         )
+
+    def _offer_popup(self, links: list[ParsedUrl], *, origin: str) -> None:
+        """One link opens its confirm window; several open one window offering "Add all"."""
+        self._popup_seen.update(p.key for p in links)  # the auto pop-up won't offer them again
+        if len(links) == 1:
+            self.capture.offer_url(links[0].url, origin=origin)
+        else:
+            self.capture.offer_links([p.url for p in links], origin=origin)
 
     def _downloadable(self, links: list[ParsedUrl]) -> list[ParsedUrl]:
         """Links worth a pop-up: a known file type or a site the video engine supports."""

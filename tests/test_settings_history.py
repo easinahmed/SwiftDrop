@@ -13,7 +13,10 @@ def test_settings_defaults_and_persistence(tmp_path):
     store = SettingsStore(db)
     assert store.get().max_concurrent == 3
     assert store.get().clipboard_monitoring is False, "the in-app clipboard banner must be off by default"
-    assert store.get().clipboard_popup is True and store.get().popup_notice_seen is False
+    assert store.get().clipboard_popup is False, "copying alone must not pop up unless the user turns it on"
+    assert store.get().watch_clipboard is False, "no clipboard watcher by default"
+    assert store.get().hotkey_enabled is True and store.get().hotkey == "ctrl+alt+d"
+    assert store.get().shortcut_notice_seen is False
     assert store.get().download_dir  # defaults to ~/Downloads
     store.update({"max_concurrent": 6, "theme": "dark", "download_dir": str(tmp_path), "bandwidth_limit_kbps": 512})
     db.close()

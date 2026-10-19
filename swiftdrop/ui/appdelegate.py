@@ -1,4 +1,4 @@
-"""Keeps SwiftDrop running in the Dock for the copy pop-up, and receives swiftdrop:// links (macOS only).
+"""Keeps SwiftDrop running in the Dock for the keyboard shortcut and pop-up, and receives swiftdrop:// links (macOS).
 
 pywebview's Cocoa backend has no hook for these, so its delegate classes are extended
 with ``objc.Category`` (the same technique as :mod:`swiftdrop.ui.navlock`):
