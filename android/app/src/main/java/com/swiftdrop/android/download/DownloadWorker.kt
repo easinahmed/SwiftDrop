@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
+import androidx.work.WorkInfo
 import androidx.work.WorkerParameters
 import com.swiftdrop.android.core.EngineOutput
 import com.swiftdrop.android.core.FileNames
@@ -13,9 +14,15 @@ import com.swiftdrop.android.core.LinkExtractor
 import com.swiftdrop.android.core.Quality
 import com.swiftdrop.android.core.SavePaths
 import com.swiftdrop.android.data.AppDatabase
+import com.swiftdrop.android.data.DownloadEntity
 import com.swiftdrop.android.data.DownloadStatus
 import com.swiftdrop.android.engine.Engine
 import com.swiftdrop.android.engine.EngineState
+import com.swiftdrop.android.spotify.Candidate
+import com.swiftdrop.android.spotify.SongMatcher
+import com.swiftdrop.android.spotify.SongState
+import com.swiftdrop.android.spotify.YtDlpResults
+import com.swiftdrop.android.spotify.retryOnceWhen
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLException
 import com.yausername.youtubedl_android.YoutubeDLRequest
@@ -36,6 +43,9 @@ import kotlinx.coroutines.withContext
 /**
  * One download: yt-dlp metadata (-J) → download into app storage → copy to Download/SwiftDrop.
  * Runs as a dataSync foreground service so it survives the app leaving the screen.
+ *
+ * A Spotify song first finds its recording on YouTube Music (or YouTube), then downloads that
+ * as audio under the Spotify song's name and tags.
  */
 class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
 
@@ -49,6 +59,7 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
 
     override suspend fun doWork(): Result {
         val item = dao.get(downloadId) ?: return Result.failure()
+        if (item.isSpotifySong) return songWork(item)
         val ctx = applicationContext
         title = item.title ?: LinkExtractor.hostOf(item.url).ifEmpty { item.url }
 
@@ -112,6 +123,102 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
         }
     }
 
+    // -- Spotify songs ------------------------------------------------------------------------------
+
+    private suspend fun songWork(item: DownloadEntity): Result {
+        val ctx = applicationContext
+        if (!item.status.isActive) {
+            SongQueue.pump(ctx) // cancelled while it waited for its turn
+            return Result.success()
+        }
+        val workDir = File(ctx.cacheDir, "downloads/$downloadId")
+        try {
+            val state = SongState.fromJson(item.spotify)
+                ?: return songFailed(item, "This song's Spotify details are missing. Share the Spotify link again.")
+            val track = state.track
+            title = track.display
+            showProgress(null, null)
+            dao.setStatus(downloadId, DownloadStatus.RUNNING)
+            Notifications.clearResult(ctx, downloadId)
+
+            val engine = Engine.awaitReady()
+            if (engine is EngineState.Failed) return songFailed(item, "The download engine couldn't start: ${engine.message}")
+
+            // A retried or resumed song reuses its recording instead of searching again.
+            val match: Candidate = state.match ?: run {
+                val search = YtDlpSongSearch(File(ctx.cacheDir, "yt-dlp")) { request -> runEngine(request) { _, _, _ -> }.out }
+                val found = SongMatcher(search).find(track)
+                if (found == null) {
+                    withContext(NonCancellable) { dao.setNoMatch(downloadId, NO_MATCH) }
+                    if (item.groupId == null) Notifications.showFailed(ctx, downloadId, title, NO_MATCH)
+                    return Result.success()
+                }
+                dao.setSpotify(downloadId, state.copy(match = found).toJson())
+                found
+            }
+            dao.setMetadata(downloadId, null, if (match.music) SITE_MUSIC else SITE_YOUTUBE, null)
+            Log.i(TAG, "Song $downloadId matched to YouTube ${match.videoId}")
+
+            val url = "https://www.youtube.com/watch?v=${match.videoId}"
+            val plan = FormatSelector.plan(Quality.AUDIO)
+            retryOnceWhen({ it is YoutubeDLException && EngineOutput.isForbidden(it.message) }) {
+                workDir.deleteRecursively()
+                workDir.mkdirs()
+                val info = fetchInfo(url, plan, workDir)
+                info.infoFile.writeText(YtDlpResults.withSongTags(info.infoFile.readText(), track, match.album))
+                showProgress(0f, null)
+                download(url, info, plan, workDir, listOf("--embed-metadata"))
+            }
+
+            val file = mediaOutputs(workDir).firstOrNull() ?: return songFailed(item, "The download finished but no file was produced.")
+            val name = track.fileName(file.extension)
+            val saved = MediaSaver.save(ctx, file, name, SavePaths.mimeType(name), item.folder)
+            file.delete()
+            dao.setCompleted(downloadId, saved.uri.toString(), saved.displayName, saved.mimeType, saved.sizeBytes)
+            if (item.groupId == null) {
+                Notifications.showCompleted(ctx, downloadId, title, saved.uri, saved.mimeType, 1)
+            } else {
+                Notifications.clearProgress(ctx, downloadId)
+            }
+            return Result.success()
+        } catch (e: CancellationException) {
+            withContext(NonCancellable) {
+                // Stopped by the system (constraints, quota): WorkManager runs it again, so it keeps its slot.
+                if (stopReason == WorkInfo.STOP_REASON_CANCELLED_BY_APP) dao.markCancelledIfActive(downloadId)
+                Notifications.clearProgress(ctx, downloadId)
+            }
+            throw e
+        } catch (e: Throwable) {
+            if (e is YoutubeDL.CanceledException) {
+                withContext(NonCancellable) { dao.markCancelledIfActive(downloadId) }
+                Notifications.clearProgress(ctx, downloadId)
+                return Result.failure()
+            }
+            Log.w(TAG, "Song $downloadId failed", e)
+            val message = when (e) {
+                is YoutubeDLException -> EngineOutput.readableError(e.message)
+                else -> e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
+            }
+            return songFailed(item, message)
+        } finally {
+            workDir.deleteRecursively()
+            withContext(NonCancellable) {
+                item.groupId?.let { Notifications.updateGroup(ctx, it) }
+                SongQueue.pump(ctx)
+            }
+        }
+    }
+
+    private suspend fun songFailed(item: DownloadEntity, message: String): Result {
+        withContext(NonCancellable) { dao.setFailed(downloadId, message) }
+        if (item.groupId == null) {
+            Notifications.showFailed(applicationContext, downloadId, title, message)
+        } else {
+            Notifications.clearProgress(applicationContext, downloadId)
+        }
+        return Result.failure()
+    }
+
     private suspend fun fail(message: String): Result {
         withContext(NonCancellable) { dao.setFailed(downloadId, message) }
         Notifications.showFailed(applicationContext, downloadId, title, message)
@@ -131,7 +238,13 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
         return MediaInfo.parse(response.out, url, infoFile)
     }
 
-    private suspend fun download(url: String, info: MediaInfo, plan: FormatPlan, workDir: File) {
+    private suspend fun download(
+        url: String,
+        info: MediaInfo,
+        plan: FormatPlan,
+        workDir: File,
+        extraOptions: List<String> = emptyList(),
+    ) {
         // Reuse the extracted info so the site is only queried once; playlists go by URL.
         val request = if (info.isPlaylist) {
             YoutubeDLRequest(url)
@@ -143,6 +256,7 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
             addOption("--newline")
             addOption("--no-mtime")
             addOption("-o", File(workDir, "%(title).150B [%(id)s].%(ext)s").absolutePath)
+            addCommands(extraOptions)
         }
 
         val progress = ProgressTracker(info.streamCount)
@@ -234,6 +348,9 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
     companion object {
         const val KEY_DOWNLOAD_ID = "download_id"
         private const val TAG = "SwiftDropDownload"
+        const val NO_MATCH = "No match found"
+        const val SITE_MUSIC = "Spotify · YouTube Music"
+        const val SITE_YOUTUBE = "Spotify · YouTube"
         private const val PROGRESS_INTERVAL_MS = 700L
 
         private val TEMP_SUFFIXES = listOf(".part", ".ytdl", ".json", ".temp", ".tmp")

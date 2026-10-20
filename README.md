@@ -75,9 +75,25 @@ It uses the same yt-dlp engine as the desktop app, via
 [youtubedl-android](https://github.com/JunkFood02/youtubedl-android), with Python and FFmpeg bundled. It
 handles the sites yt-dlp supports, plus direct file links.
 
+**Spotify songs, albums and playlists** work the same way as on the desktop. Share a Spotify link (or a
+`spotify.link` short link) to SwiftDrop, or paste it in the app. SwiftDrop reads the song list from
+Spotify's public embed page (no sign-in), finds each song on YouTube Music (then YouTube), and saves it
+as audio (`.m4a`), named and tagged `Artist - Title`. Spotify's own audio is DRM-protected and is never
+touched.
+
+- A song needs the same title and artist on YouTube and a length within a few seconds. Live, remix,
+  cover and similar versions only count when the Spotify title says so too. A song with no such match
+  shows **No match found** and isn't downloaded on a guess. Sound quality is YouTube's, not Spotify's.
+- A single song goes to `Download/SwiftDrop`. An album or playlist goes to
+  `Download/SwiftDrop/<album or playlist name>` and appears in the list as one entry. That entry shows its
+  songs and progress ("12 of 50 done · 2 not found"), and has **Cancel all**.
+- Songs download 3 at a time, as audio, whatever the default quality is.
+- Without signing in, Spotify lists only the first 100 songs of a playlist. Albums and single songs are
+  complete. Private playlists, podcasts and audiobooks aren't supported.
+
 **Install**
 
-1. Copy `SwiftDrop-Android-1.0.0.apk` to the phone and open it.
+1. Copy `SwiftDrop-Android-1.1.0.apk` to the phone and open it.
 2. Android asks you to allow **Install unknown apps** for the app you opened it from (Files, Chrome…).
    Allow it, go back and tap **Install**.
 3. Open SwiftDrop once. Allow notifications so you can see progress and finished downloads.

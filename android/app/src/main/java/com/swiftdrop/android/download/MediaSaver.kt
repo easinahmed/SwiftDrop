@@ -23,24 +23,31 @@ object MediaSaver {
 
     fun fileProviderAuthority(context: Context) = "${context.packageName}.files"
 
-    fun save(context: Context, source: File, displayName: String, mimeType: String): Saved =
+    /** Saves into Download/SwiftDrop, or Download/SwiftDrop/[folder] (an album or playlist). */
+    fun save(context: Context, source: File, displayName: String, mimeType: String, folder: String? = null): Saved =
         if (SavePaths.usesMediaStore(Build.VERSION.SDK_INT)) {
-            saveToMediaStore(context, source, displayName, mimeType)
+            saveToMediaStore(context, source, displayName, mimeType, folder)
         } else {
-            saveToLegacyFolder(context, source, displayName, mimeType)
+            saveToLegacyFolder(context, source, displayName, mimeType, folder)
         }
 
     @RequiresApi(29)
-    private fun saveToMediaStore(context: Context, source: File, displayName: String, mimeType: String): Saved {
+    private fun saveToMediaStore(
+        context: Context,
+        source: File,
+        displayName: String,
+        mimeType: String,
+        folder: String?,
+    ): Saved {
         val resolver = context.contentResolver
         val values = ContentValues().apply {
             put(MediaStore.Downloads.DISPLAY_NAME, displayName)
             put(MediaStore.Downloads.MIME_TYPE, mimeType)
-            put(MediaStore.Downloads.RELATIVE_PATH, SavePaths.RELATIVE_PATH)
+            put(MediaStore.Downloads.RELATIVE_PATH, SavePaths.relativePath(folder))
             put(MediaStore.Downloads.IS_PENDING, 1)
         }
         val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-            ?: throw IOException("Couldn't create the file in Download/SwiftDrop.")
+            ?: throw IOException("Couldn't create the file in ${SavePaths.relativePath(folder)}.")
         try {
             val out = resolver.openOutputStream(uri) ?: throw IOException("Couldn't write to Download/SwiftDrop.")
             out.use { output -> source.inputStream().use { it.copyTo(output, BUFFER) } }
@@ -57,11 +64,17 @@ object MediaSaver {
     }
 
     @Suppress("DEPRECATION")
-    private fun saveToLegacyFolder(context: Context, source: File, displayName: String, mimeType: String): Saved {
+    private fun saveToLegacyFolder(
+        context: Context,
+        source: File,
+        displayName: String,
+        mimeType: String,
+        folder: String?,
+    ): Saved {
         val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) ==
             PackageManager.PERMISSION_GRANTED
         if (!granted) throw IOException("Storage permission is needed to save into Download/SwiftDrop. Open SwiftDrop and allow it.")
-        val dir = SavePaths.legacyDirectory(Environment.getExternalStorageDirectory())
+        val dir = SavePaths.legacyDirectory(Environment.getExternalStorageDirectory(), folder)
         if (!dir.isDirectory && !dir.mkdirs()) throw IOException("Couldn't create ${dir.path}.")
         val name = SavePaths.uniqueName(displayName) { File(dir, it).exists() }
         val target = File(dir, name)

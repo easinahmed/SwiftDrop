@@ -3,7 +3,9 @@ package com.swiftdrop.android.data
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
-enum class DownloadStatus { QUEUED, RUNNING, COMPLETED, FAILED, CANCELLED;
+enum class DownloadStatus { QUEUED, RUNNING, COMPLETED, FAILED, CANCELLED,
+    /** A Spotify song with no recording on YouTube that matches well enough; nothing was downloaded. */
+    NO_MATCH;
 
     val isActive: Boolean get() = this == QUEUED || this == RUNNING
 }
@@ -27,4 +29,36 @@ data class DownloadEntity(
     val sizeBytes: Long = 0,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
+    /** null: a link yt-dlp downloads; [KIND_SPOTIFY_LINK] or [KIND_SPOTIFY_SONG]. */
+    val kind: String? = null,
+    /** The Spotify album or playlist ([DownloadGroupEntity]) this song belongs to. */
+    val groupId: Long? = null,
+    /** Sub-folder of Download/SwiftDrop: the album or playlist name. */
+    val folder: String? = null,
+    /** The Spotify song and, once found, its YouTube match (SongState JSON). */
+    val spotify: String? = null,
+) {
+    val isSpotifySong: Boolean get() = kind == KIND_SPOTIFY_SONG
+    val isSpotifyLink: Boolean get() = kind == KIND_SPOTIFY_LINK
+
+    companion object {
+        /** A shared Spotify link whose songs are still being read. */
+        const val KIND_SPOTIFY_LINK = "spotify_link"
+        /** One Spotify song, downloaded from its YouTube match. */
+        const val KIND_SPOTIFY_SONG = "spotify_song"
+    }
+}
+
+/** A Spotify album or playlist: a header over its songs in the Downloads list. */
+@Entity(tableName = "download_groups")
+data class DownloadGroupEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val sourceUrl: String,
+    val name: String,
+    /** "album" | "playlist" */
+    val kind: String,
+    val imageUrl: String? = null,
+    /** Spotify listed only the first 100 songs (its embed page's limit for playlists). */
+    val partial: Boolean = false,
+    val createdAt: Long = System.currentTimeMillis(),
 )

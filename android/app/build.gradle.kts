@@ -36,8 +36,8 @@ android {
         applicationId = "com.swiftdrop.android"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.1.0"
 
         ndk {
             // yt-dlp's bundled Python and FFmpeg are native; ship only the two phone ABIs.
@@ -116,4 +116,5 @@ dependencies {
     implementation(libs.youtubedl.ffmpeg)
 
     testImplementation(libs.junit)
+    testImplementation(libs.org.json)
 }

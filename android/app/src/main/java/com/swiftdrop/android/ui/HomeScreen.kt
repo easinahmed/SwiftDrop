@@ -23,6 +23,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
@@ -46,6 +48,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -68,13 +71,16 @@ import com.swiftdrop.android.core.Quality
 import com.swiftdrop.android.core.SavePaths
 import com.swiftdrop.android.data.DownloadEntity
 import com.swiftdrop.android.data.DownloadStatus
+import com.swiftdrop.android.download.DownloadWorker
+import com.swiftdrop.android.download.Downloads
 import com.swiftdrop.android.engine.EngineState
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit) {
-    val downloads by viewModel.downloads.collectAsStateWithLifecycle()
+    val items by viewModel.items.collectAsStateWithLifecycle()
+    val collapsed = remember { mutableStateMapOf<Long, Boolean>() }
     val engineState by viewModel.engineState.collectAsStateWithLifecycle()
     val quality by viewModel.quality.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
@@ -118,18 +124,47 @@ fun HomeScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit) {
                     modifier = Modifier.padding(top = 8.dp, start = 4.dp),
                 )
             }
-            if (downloads.isEmpty()) {
+            if (items.isEmpty()) {
                 item(key = "empty") { EmptyState() }
-            } else {
-                items(downloads, key = { it.id }) { item ->
-                    DownloadRow(
-                        item = item,
-                        onCancel = { viewModel.cancel(item.id) },
-                        onRetry = { viewModel.retry(item.id) },
-                        onOpen = { FileActions.open(context, item) },
-                        onShare = { FileActions.share(context, item) },
-                        onRemove = { viewModel.remove(item.id) },
-                    )
+            }
+            for (entry in items) {
+                when (entry) {
+                    is HomeItem.Single -> item(key = "d-${entry.download.id}") {
+                        DownloadRow(
+                            item = entry.download,
+                            onCancel = { viewModel.cancel(entry.download.id) },
+                            onRetry = { viewModel.retry(entry.download.id) },
+                            onOpen = { FileActions.open(context, entry.download) },
+                            onShare = { FileActions.share(context, entry.download) },
+                            onRemove = { viewModel.remove(entry.download.id) },
+                        )
+                    }
+                    is HomeItem.Group -> {
+                        val groupId = entry.group.id
+                        val expanded = collapsed[groupId] != true
+                        item(key = "g-$groupId") {
+                            GroupHeader(
+                                item = entry,
+                                expanded = expanded,
+                                onToggle = { collapsed[groupId] = expanded },
+                                onCancel = { viewModel.cancelGroup(groupId) },
+                                onRemove = { viewModel.removeGroup(groupId) },
+                            )
+                        }
+                        if (expanded) {
+                            items(entry.songs, key = { "d-${it.id}" }) { song ->
+                                DownloadRow(
+                                    item = song,
+                                    compact = true,
+                                    onCancel = { viewModel.cancel(song.id) },
+                                    onRetry = { viewModel.retry(song.id) },
+                                    onOpen = { FileActions.open(context, song) },
+                                    onShare = { FileActions.share(context, song) },
+                                    onRemove = { viewModel.remove(song.id) },
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -239,6 +274,71 @@ private fun EmptyState() {
     }
 }
 
+/** A Spotify album or playlist: cover, name, "12 of 50 done · 2 not found", and its actions. */
+@Composable
+private fun GroupHeader(
+    item: HomeItem.Group,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    onCancel: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    val group = item.group
+    val summary = item.summary
+    Card(
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Thumbnail(url = group.imageUrl, placeholderIcon = R.drawable.ic_music, modifier = Modifier.size(56.dp))
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        group.name,
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        "Spotify ${group.kind} · ${summary.total} ${if (summary.total == 1) "song" else "songs"}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        summary.line(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                Action(
+                    if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                    if (expanded) "Hide songs" else "Show songs",
+                    onToggle,
+                )
+                if (summary.isActive) {
+                    Action(Icons.Filled.Close, "Cancel all", onCancel)
+                } else {
+                    Action(Icons.Filled.Delete, "Remove from list", onRemove)
+                }
+            }
+            if (group.partial) {
+                Text(
+                    "Spotify only shares the first 100 songs of a playlist.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+            }
+            if (summary.isActive) {
+                Spacer(Modifier.height(10.dp))
+                LinearProgressIndicator(progress = { summary.fraction }, modifier = Modifier.fillMaxWidth())
+            }
+        }
+    }
+}
+
 @Composable
 private fun DownloadRow(
     item: DownloadEntity,
@@ -247,20 +347,22 @@ private fun DownloadRow(
     onOpen: () -> Unit,
     onShare: () -> Unit,
     onRemove: () -> Unit,
+    compact: Boolean = false,
 ) {
     val context = LocalContext.current
     val isAudio = item.mimeType?.startsWith("audio/") == true || item.quality == Quality.AUDIO.name
     Card(
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(if (compact) 16.dp else 20.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLowest),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        modifier = if (compact) Modifier.padding(start = 16.dp) else Modifier,
     ) {
-        Column(Modifier.padding(12.dp)) {
+        Column(Modifier.padding(if (compact) 10.dp else 12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Thumbnail(
                     url = item.thumbnailUrl,
                     placeholderIcon = if (isAudio) R.drawable.ic_music else R.drawable.ic_movie,
-                    modifier = Modifier.size(width = 96.dp, height = 56.dp),
+                    modifier = if (compact) Modifier.size(40.dp) else Modifier.size(width = 96.dp, height = 56.dp),
                 )
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
@@ -272,16 +374,32 @@ private fun DownloadRow(
                     )
                     Spacer(Modifier.height(2.dp))
                     Text(
-                        statusLine(context, item),
+                        statusLine(context, item, showFolder = !compact),
                         style = MaterialTheme.typography.bodySmall,
-                        color = if (item.status == DownloadStatus.FAILED) MaterialTheme.colorScheme.error
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = if (item.status == DownloadStatus.FAILED || item.status == DownloadStatus.NO_MATCH) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
                         maxLines = 3,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
+                // A song in an album or playlist keeps its main actions on the same line.
+                if (compact) {
+                    when (item.status) {
+                        DownloadStatus.QUEUED, DownloadStatus.RUNNING -> Action(Icons.Filled.Close, "Cancel", onCancel)
+                        DownloadStatus.COMPLETED -> {
+                            Action(Icons.Filled.PlayArrow, "Open", onOpen)
+                            Action(Icons.Filled.Share, "Share", onShare)
+                        }
+                        DownloadStatus.FAILED, DownloadStatus.CANCELLED, DownloadStatus.NO_MATCH ->
+                            Action(Icons.Filled.Refresh, "Retry", onRetry)
+                    }
+                }
             }
-            if (item.status.isActive) {
+            // A song waiting for its turn in an album or playlist shows no bar until it starts.
+            if (item.status.isActive && !(compact && item.status == DownloadStatus.QUEUED)) {
                 Spacer(Modifier.height(10.dp))
                 if (item.status == DownloadStatus.RUNNING && item.progress > 0f) {
                     LinearProgressIndicator(
@@ -292,7 +410,7 @@ private fun DownloadRow(
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }
             }
-            Row(
+            if (!compact) Row(
                 Modifier
                     .fillMaxWidth()
                     .padding(top = 4.dp),
@@ -306,7 +424,7 @@ private fun DownloadRow(
                         Action(Icons.Filled.Share, "Share", onShare)
                         Action(Icons.Filled.Delete, "Remove from list", onRemove)
                     }
-                    DownloadStatus.FAILED, DownloadStatus.CANCELLED -> {
+                    DownloadStatus.FAILED, DownloadStatus.CANCELLED, DownloadStatus.NO_MATCH -> {
                         Action(Icons.Filled.Refresh, "Retry", onRetry)
                         Action(Icons.Filled.Delete, "Remove from list", onRemove)
                     }
@@ -323,22 +441,29 @@ private fun Action(icon: ImageVector, label: String, onClick: () -> Unit) {
     }
 }
 
-private fun statusLine(context: Context, item: DownloadEntity): String {
+private fun statusLine(context: Context, item: DownloadEntity, showFolder: Boolean): String {
     val site = item.site
     val detail = when (item.status) {
-        DownloadStatus.QUEUED -> "Waiting to start…"
-        DownloadStatus.RUNNING -> if (item.progress <= 0f) {
-            "Starting…"
-        } else {
-            listOfNotNull("${item.progress.roundToInt()}%", item.speed).joinToString(" · ")
+        DownloadStatus.QUEUED -> when {
+            item.isSpotifyLink -> "Getting songs…"
+            item.isSpotifySong -> "Waiting…"
+            else -> "Waiting to start…"
+        }
+        DownloadStatus.RUNNING -> when {
+            item.isSpotifyLink -> "Getting songs…"
+            // Not matched yet: the site still says just "Spotify".
+            item.isSpotifySong && item.progress <= 0f && item.site == Downloads.SPOTIFY -> "Finding the song on YouTube…"
+            item.progress <= 0f -> "Starting…"
+            else -> listOfNotNull("${item.progress.roundToInt()}%", item.speed).joinToString(" · ")
         }
         DownloadStatus.COMPLETED -> buildString {
             append("Saved")
             if (item.sizeBytes > 0) append(" · ").append(Formatter.formatShortFileSize(context, item.sizeBytes))
-            append(" · ").append(SavePaths.RELATIVE_PATH)
+            if (showFolder) append(" · ").append(SavePaths.relativePath(item.folder))
         }
         DownloadStatus.FAILED -> item.error ?: "Failed"
         DownloadStatus.CANCELLED -> "Cancelled"
+        DownloadStatus.NO_MATCH -> DownloadWorker.NO_MATCH
     }
     return if (site.isNullOrBlank()) detail else "$site · $detail"
 }

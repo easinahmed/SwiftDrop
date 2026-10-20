@@ -24,6 +24,18 @@ class SavePathsTest {
     }
 
     @Test
+    fun relativePath_putsAlbumsAndPlaylistsInTheirOwnFolder() {
+        assertEquals("Download/SwiftDrop", SavePaths.relativePath(null))
+        assertEquals("Download/SwiftDrop", SavePaths.relativePath(" "))
+        assertEquals("Download/SwiftDrop/Road Trip", SavePaths.relativePath("Road Trip"))
+        assertEquals("Download/SwiftDrop/AC DC Hits", SavePaths.relativePath("AC/DC: Hits"))
+        assertEquals(
+            File("/storage/emulated/0/Download/SwiftDrop/Road Trip"),
+            SavePaths.legacyDirectory(File("/storage/emulated/0"), "Road Trip"),
+        )
+    }
+
+    @Test
     fun legacyDirectory_isUnderExternalRoot() {
         assertEquals(
             File("/storage/emulated/0/Download/SwiftDrop"),

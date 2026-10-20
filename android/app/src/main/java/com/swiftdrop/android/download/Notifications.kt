@@ -19,9 +19,14 @@ import androidx.work.ForegroundInfo
 import androidx.work.WorkManager
 import com.swiftdrop.android.R
 import com.swiftdrop.android.core.SavePaths
+import com.swiftdrop.android.data.AppDatabase
+import com.swiftdrop.android.data.DownloadGroupEntity
+import com.swiftdrop.android.data.GroupSummary
 import com.swiftdrop.android.ui.MainActivity
 import java.util.UUID
 import kotlin.math.roundToInt
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 object Notifications {
 
@@ -30,6 +35,10 @@ object Notifications {
 
     fun progressId(downloadId: Long): Int = (100_000 + downloadId * 2).toInt()
     fun resultId(downloadId: Long): Int = (100_000 + downloadId * 2 + 1).toInt()
+    fun groupId(groupId: Long): Int = (50_000_000 + groupId).toInt()
+
+    /** Several songs finish at once; one at a time keeps the newest count on screen. */
+    private val groupLock = Mutex()
 
     fun createChannels(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
@@ -154,6 +163,75 @@ object Notifications {
             .build()
         cancel(context, progressId(downloadId))
         notify(context, resultId(downloadId), notification)
+    }
+
+    // -- Spotify albums and playlists ---------------------------------------------------------------
+
+    /** "Found 50 songs in Road Trip", right after the link is read. */
+    suspend fun showGroupFound(context: Context, group: DownloadGroupEntity, songCount: Int) {
+        val headline = if (group.partial) {
+            "Found the first $songCount songs in ${group.name}"
+        } else {
+            "Found $songCount ${if (songCount == 1) "song" else "songs"} in ${group.name}"
+        }
+        groupLock.withLock {
+            val summary = GroupSummary(songCount, 0, 0, 0, 0, songCount)
+            notify(context, groupId(group.id), groupNotification(context, group, summary, headline))
+        }
+    }
+
+    /** The album's or playlist's progress: "12 of 50 done · 1 not found", then the result. */
+    suspend fun updateGroup(context: Context, groupId: Long) {
+        val dao = AppDatabase.get(context).downloads()
+        groupLock.withLock {
+            val group = dao.getGroup(groupId) ?: return
+            val summary = GroupSummary.of(dao.songsInGroup(groupId))
+            notify(context, groupId(groupId), groupNotification(context, group, summary, null))
+        }
+    }
+
+    fun clearGroup(context: Context, groupId: Long) = cancel(context, groupId(groupId))
+
+    private fun groupNotification(
+        context: Context,
+        group: DownloadGroupEntity,
+        summary: GroupSummary,
+        headline: String?,
+    ): Notification {
+        val where = SavePaths.relativePath(group.name)
+        val builder = NotificationCompat.Builder(context, CHANNEL_RESULTS)
+            .setSmallIcon(R.drawable.ic_stat_download)
+            .setContentIntent(openAppIntent(context))
+            .setOnlyAlertOnce(true)
+        if (summary.isActive) {
+            val text = if (headline != null) {
+                "Downloading ${SongQueue.MAX_PARALLEL} at a time to $where"
+            } else {
+                summary.line()
+            }
+            val cancelAll = PendingIntent.getBroadcast(
+                context,
+                groupId(group.id),
+                NotificationActionReceiver.cancelGroupIntent(context, group.id),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            builder.setContentTitle(headline ?: group.name)
+                .setContentText(text)
+                .setProgress(summary.total, summary.finished, false)
+                .setCategory(NotificationCompat.CATEGORY_PROGRESS)
+                .addAction(R.drawable.ic_close, "Cancel all", cancelAll)
+        } else {
+            val missing = listOfNotNull(
+                summary.notFound.takeIf { it > 0 }?.let { "$it not found" },
+                summary.failed.takeIf { it > 0 }?.let { "$it failed" },
+                summary.cancelled.takeIf { it > 0 }?.let { "$it cancelled" },
+            )
+            builder.setContentTitle("${group.name}: ${summary.done} of ${summary.total} songs saved")
+                .setContentText((missing + where).joinToString(" · "))
+                .setAutoCancel(true)
+                .setCategory(NotificationCompat.CATEGORY_STATUS)
+        }
+        return builder.build()
     }
 
     fun clear(context: Context, downloadId: Long) {

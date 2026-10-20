@@ -15,13 +15,17 @@ object SavePaths {
     const val RELATIVE_PATH = "$DOWNLOADS_DIR/$FOLDER"
     const val MEDIASTORE_MIN_SDK = 29
 
+    /** "Download/SwiftDrop", or "Download/SwiftDrop/<folder>" for an album or playlist. */
+    fun relativePath(folder: String?): String =
+        if (folder.isNullOrBlank()) RELATIVE_PATH else "$RELATIVE_PATH/${FileNames.sanitizeBase(folder)}"
+
     fun usesMediaStore(sdkInt: Int): Boolean = sdkInt >= MEDIASTORE_MIN_SDK
 
     fun needsLegacyWritePermission(sdkInt: Int): Boolean = !usesMediaStore(sdkInt)
 
     /** Public folder used on API 26–28, under the external storage root. */
-    fun legacyDirectory(externalStorageRoot: File): File =
-        File(File(externalStorageRoot, DOWNLOADS_DIR), FOLDER)
+    fun legacyDirectory(externalStorageRoot: File, folder: String? = null): File =
+        File(externalStorageRoot, relativePath(folder))
 
     /** "name.ext", then "name (1).ext", "name (2).ext", … until [exists] says it is free. */
     fun uniqueName(fileName: String, exists: (String) -> Boolean): String {

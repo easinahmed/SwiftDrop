@@ -10,6 +10,10 @@ object EngineOutput {
     fun speed(line: String?): String? =
         line?.let { SPEED.find(it)?.groupValues?.get(1)?.replace(" ", "") }
 
+    /** YouTube refused the stream address (HTTP 403), which a fresh extraction usually fixes. */
+    fun isForbidden(stderr: String?): Boolean =
+        stderr != null && (stderr.contains("HTTP Error 403") || stderr.contains("403: Forbidden"))
+
     /** A one-line, human-readable reason from yt-dlp's stderr. */
     fun readableError(stderr: String?): String {
         val lines = stderr.orEmpty().lines().map { it.trim() }.filter { it.isNotEmpty() }

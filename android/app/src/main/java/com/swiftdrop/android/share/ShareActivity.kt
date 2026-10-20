@@ -14,11 +14,13 @@ import com.swiftdrop.android.core.LinkExtractor
 import com.swiftdrop.android.core.SavePaths
 import com.swiftdrop.android.data.Settings
 import com.swiftdrop.android.download.Downloads
+import com.swiftdrop.android.spotify.SpotifyLinks
 import kotlinx.coroutines.launch
 
 /**
  * Invisible share target: "Share → SwiftDrop" or "Open with SwiftDrop".
  * Queues the download at the default quality and gets out of the way immediately.
+ * A Spotify song, album or playlist is read in the background and saved as audio.
  */
 class ShareActivity : ComponentActivity() {
 
@@ -37,9 +39,17 @@ class ShareActivity : ComponentActivity() {
             return
         }
 
+        val refusal = SpotifyLinks.refusal(url)
+        if (refusal != null) {
+            Toast.makeText(this, refusal, Toast.LENGTH_LONG).show()
+            finish()
+            return
+        }
+
         val app = applicationContext
         SwiftDropApp.scope.launch { Downloads.enqueue(app, url) }
-        Toast.makeText(this, "Downloading with SwiftDrop…", Toast.LENGTH_SHORT).show()
+        val started = if (SpotifyLinks.isSpotify(url)) "Getting Spotify songs…" else "Downloading with SwiftDrop…"
+        Toast.makeText(this, started, Toast.LENGTH_SHORT).show()
 
         val permission = permissionToAsk()
         if (permission != null) {
