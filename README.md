@@ -62,6 +62,64 @@ It then builds the installer with Inno Setup (`packaging/windows/SwiftDrop.iss`)
 as a workflow artifact. For tags, or when you run the workflow manually with `release_tag`, it's also
 attached to that GitHub release.
 
+## Android
+
+SwiftDrop for Android is a share-to-download app, in the style of Snaptube. In YouTube, Chrome or any other
+app, tap **Share → SwiftDrop**, or long-press a link and choose **Open with → Download with SwiftDrop**.
+The download starts at once in the background, with a progress notification (percent, speed, **Cancel**).
+When it finishes, tap the notification to play the file. If it fails, the notification shows the reason
+and a **Retry** button. You can also paste a link into the app, where the list of downloads lets you
+cancel, retry, open, share or remove each one. Removing an entry leaves the file in place.
+
+It uses the same yt-dlp engine as the desktop app, via
+[youtubedl-android](https://github.com/JunkFood02/youtubedl-android), with Python and FFmpeg bundled. It
+handles the sites yt-dlp supports, plus direct file links.
+
+**Install**
+
+1. Copy `SwiftDrop-Android-1.0.0.apk` to the phone and open it.
+2. Android asks you to allow **Install unknown apps** for the app you opened it from (Files, Chrome…).
+   Allow it, go back and tap **Install**.
+3. Open SwiftDrop once. Allow notifications so you can see progress and finished downloads.
+
+**Requirements:** Android 8.0 (API 26) or later, on an ARM phone (arm64-v8a or armeabi-v7a).
+
+**Where files go:** `Download/SwiftDrop` in the phone's shared storage. Galleries, music players and the
+Files app all see it. Android 10 and later save there through MediaStore, which needs no storage
+permission. On Android 8–9, SwiftDrop asks for storage access, which saving needs.
+
+**Settings:**
+
+- **Default quality:** Best, 1080p (the default), 720p, 480p, or Audio only (m4a). Videos prefer MP4
+  (H.264 + AAC), merged into `.mp4`.
+- **Wi-Fi only:** downloads wait for an unmetered network.
+- **Update download engine:** updates yt-dlp from its stable channel. SwiftDrop also checks for an
+  update once a week in the background. If YouTube downloads start failing, update the engine first.
+
+**Build**
+
+You need JDK 17 and the Android SDK (platform 36, build-tools 36.0.0). Point `android/local.properties`
+at the SDK with `sdk.dir=…`, or set `ANDROID_HOME`.
+
+```sh
+cd android
+JAVA_HOME=/path/to/jdk-17 ./gradlew testDebugUnitTest assembleRelease
+# → app/build/outputs/apk/release/app-release.apk
+```
+
+The stack is Kotlin, Jetpack Compose (Material 3), WorkManager and Room. It builds with AGP 9.1 on the
+Gradle 9.3.1 wrapper.
+
+**Release signing:** the build reads `~/.swiftdrop/android/keystore.properties` (`storeFile`,
+`storePassword`, `keyAlias`, `keyPassword`). To use another file, set `SWIFTDROP_KEYSTORE_PROPERTIES`. If
+the file is missing, the build prints a warning and produces an unsigned `app-release-unsigned.apk`.
+The release key is `~/.swiftdrop/android/swiftdrop-release.jks` (alias `swiftdrop`).
+
+> **Back up the keystore and its properties file somewhere safe and private, such as a password
+> manager.** Android only installs an update over an existing app if it's signed with the same key. If
+> the key is lost, users must uninstall SwiftDrop (and lose their download history) to install a new
+> build. Never commit either file. `android/.gitignore` excludes them.
+
 ## Using SwiftDrop
 
 | Screen | What it does |

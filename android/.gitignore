@@ -1,0 +1,27 @@
+# Gradle / Android Studio
+.gradle/
+.kotlin/
+build/
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Machine-specific SDK path
+local.properties
+
+# Release signing material: never commit
+*.jks
+*.keystore
+*.p12
+keystore.properties
+signing.properties
+
+# Packaged APKs
+dist/
+*.apk
+*.aab
+
+# macOS
+.DS_Store
