@@ -172,7 +172,7 @@ class CaptureManager:
             page_media: MediaKind = (
                 link.kind if link.kind not in (MediaKind.UNKNOWN, MediaKind.OTHER) else MediaKind.VIDEO
             )
-            provider = link.provider if link.provider in ("ytdlp", "auto") else "auto"
+            provider = link.provider if link.provider in ("ytdlp", "spotify", "auto") else "auto"
             return PendingCapture(
                 id=new_id(),
                 kind="page",
@@ -238,6 +238,7 @@ class CaptureManager:
         with self._lock:
             capture = self._pending.get(capture_id)
             data = capture.public() if capture is not None else None
+            provider = capture.provider if capture is not None else "auto"
         if data is None:
             raise CaptureError("This link is no longer waiting.")
         settings = self._service.settings.get()
@@ -245,7 +246,7 @@ class CaptureManager:
             {
                 "folder": settings.download_dir,
                 "theme": settings.theme,
-                "quality_label": settings.default_options().label(),
+                "quality_label": settings.default_options().for_provider(provider).label(),
             }
         )
         return data
@@ -283,7 +284,7 @@ class CaptureManager:
         key = dedupe_key(url)
         if key in service.queue.active_keys():
             raise CaptureError("This link is already in your downloads.")
-        options = service.settings.get().default_options()
+        options = service.settings.get().default_options().for_provider(capture.provider)
         if capture.kind == "file":
             name = sanitize_filename(filename.strip()) if filename.strip() else capture.filename
             kind = kind_for_extension(split_ext(name)[1])

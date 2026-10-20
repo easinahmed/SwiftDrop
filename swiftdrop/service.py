@@ -36,6 +36,7 @@ from swiftdrop.platform.quarantine import needs_open_confirmation
 from swiftdrop.preview import PreviewItem, PreviewManager
 from swiftdrop.providers.direct import DirectProvider
 from swiftdrop.providers.registry import ProviderRegistry, SiteMatcher
+from swiftdrop.providers.spotify import SpotifyProvider
 from swiftdrop.queue import BatchSummary, DownloadQueue
 from swiftdrop.ratelimit import TokenBucket
 from swiftdrop.settings import SettingsError, SettingsStore, validate_directory, validate_patch
@@ -87,7 +88,8 @@ class AppService:
             lambda connections: SegmentedDownloader(connections=connections, pool=GLOBAL_POOL, bucket=self.bucket),
         )
         sites = _build_site_matcher(self.bucket) if enable_sites else None
-        self.registry = ProviderRegistry(direct=direct, sites=sites)
+        spotify = SpotifyProvider(sites) if sites is not None else None
+        self.registry = ProviderRegistry(direct=direct, sites=sites, spotify=spotify)
         self.queue = DownloadQueue(
             registry=self.registry,
             db=self.db,
@@ -226,12 +228,15 @@ class AppService:
                 skipped.append({"url": item.url, "reason": "Already in the queue"})
                 continue
             provider = info.provider if info else item.link.provider
+            if provider not in ("direct", "ytdlp", "spotify", "auto"):
+                provider = "auto"
+            job_opts = opts.for_provider(provider)
             job = Job(
                 url=item.url,
                 key=item.key,
                 destination=dest,
-                options=opts,
-                provider=provider if provider in ("direct", "ytdlp", "auto") else "auto",
+                options=job_opts,
+                provider=provider,
                 title=(info.title if info else "") or "",
                 source=display_domain(item.url),
                 kind=(info.kind if info and info.kind != MediaKind.UNKNOWN else item.link.kind),
@@ -239,7 +244,7 @@ class AppService:
                 extractor=(info.extractor if info else None) or item.link.label,
                 duration=info.duration if info else None,
                 total_bytes=info.size if info and not info.size_is_estimate else None,
-                quality_label=opts.label() if provider == "ytdlp" else None,
+                quality_label=job_opts.label() if provider in ("ytdlp", "spotify") else None,
             )
             job_ids.extend(self.queue.add([job]))
             active[item.key] = JobState.QUEUED.value
@@ -280,14 +285,15 @@ class AppService:
             if link.blocked:
                 skipped.append({"url": url, "reason": link.blocked.title})
                 continue
-            default_kind = MediaKind.AUDIO if opts.audio_only else MediaKind.VIDEO
+            entry_opts = opts.for_provider(link.provider)
+            default_kind = MediaKind.AUDIO if entry_opts.audio_only else MediaKind.VIDEO
             kind = link.kind if link.provider == "direct" else default_kind
             jobs.append(
                 Job(
                     url=url,
                     key=key,
                     destination=dest,
-                    options=opts,
+                    options=entry_opts,
                     provider=link.provider,
                     title=entry.title,
                     source=display_domain(url),
@@ -296,7 +302,7 @@ class AppService:
                     extractor=info.extractor,
                     duration=entry.duration,
                     playlist_index=entry.index,
-                    quality_label=opts.label() if link.provider != "direct" else None,
+                    quality_label=entry_opts.label() if link.provider != "direct" else None,
                 )
             )
             active[key] = JobState.QUEUED.value
@@ -588,7 +594,7 @@ class AppService:
             info = self.registry.classify(parsed.url)
             if info.blocked:
                 continue
-            if info.provider in ("direct", "ytdlp"):
+            if info.provider in ("direct", "ytdlp", "spotify"):
                 picked.add(parsed.key)
             elif info.provider == "auto":
                 unknown.append(parsed)

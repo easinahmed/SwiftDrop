@@ -78,26 +78,27 @@ function stats(): Stats {
 function classify(url: string): PreviewItem {
   const host = new URL(url).hostname.replace(/^www\./, "");
   const ext = url.split("?")[0].split(".").pop()?.toLowerCase() ?? "";
-  const kind = ["mp4", "mov", "webm"].includes(ext) ? "video" : ["mp3", "m4a"].includes(ext) ? "audio" : ["jpg", "png", "webp"].includes(ext) ? "image" : "unknown";
-  const blocked = host.includes("spotify.com");
-  const playlist = url.includes("playlist") || url.includes("list=");
+  const spotify = host === "open.spotify.com";
+  const kind = spotify ? "audio" : ["mp4", "mov", "webm"].includes(ext) ? "video" : ["mp3", "m4a"].includes(ext) ? "audio" : ["jpg", "png", "webp"].includes(ext) ? "image" : "unknown";
+  const blocked = host.includes("netflix.com");
+  const playlist = url.includes("playlist") || url.includes("list=") || (spotify && url.includes("/album/"));
   return {
     id: id(),
     url,
     source: host,
     status: blocked ? "blocked" : "pending",
     link: {
-      provider: blocked ? "blocked" : kind !== "unknown" ? "direct" : "ytdlp",
+      provider: blocked ? "blocked" : spotify ? "spotify" : kind !== "unknown" ? "direct" : "ytdlp",
       kind: kind as PreviewItem["kind"],
-      label: blocked ? "Spotify" : kind !== "unknown" ? `${ext.toUpperCase()} file` : "Video site",
+      label: blocked ? "Netflix" : spotify ? "Spotify" : kind !== "unknown" ? `${ext.toUpperCase()} file` : "Video site",
       extractor: null,
       playlist_hint: playlist,
       blocked: blocked
         ? {
             code: "drm",
-            title: "Spotify isn't supported",
-            message: "Spotify music and audiobooks are DRM-protected streams, so they can't be saved as files.",
-            hint: "Use “Download” in the Spotify app (Premium) for offline listening.",
+            title: "Netflix isn't supported",
+            message: "Netflix video is DRM-protected.",
+            hint: "Use the service's official app to download for offline viewing where your plan allows it.",
             detail: "",
             retryable: false,
           }
@@ -120,14 +121,15 @@ function inspect(item: PreviewItem) {
   }, 200 + Math.random() * 400);
   window.setTimeout(() => {
     const playlist = item.link.playlist_hint;
+    const spotify = item.link.provider === "spotify";
     item.status = "ready";
-    item.title = playlist ? "Nature Documentary Collection" : `Sample media ${item.order}`;
+    item.title = playlist ? (spotify ? "Road Trip Mix" : "Nature Documentary Collection") : `Sample media ${item.order}`;
     item.kind = item.kind === "unknown" ? "video" : item.kind;
     item.info = {
       provider: item.link.provider,
       title: item.title,
       kind: item.kind,
-      extractor: playlist ? "Video site" : null,
+      extractor: spotify ? "Spotify" : playlist ? "Video site" : null,
       thumbnail: null,
       duration: item.kind === "image" ? null : 120 + item.order * 13,
       size: playlist ? null : 4_000_000 + item.order * 1_300_000,

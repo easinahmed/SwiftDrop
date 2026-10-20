@@ -19,6 +19,7 @@ from swiftdrop.models import ErrorInfo, InspectResult, MediaKind
 from swiftdrop.providers.base import DownloadOutcome, JobContext, Provider
 from swiftdrop.providers.restricted import match_restricted, restricted_error
 from swiftdrop.providers.sites import match_known_site
+from swiftdrop.providers.spotify import is_short_link, parse_spotify_link
 from swiftdrop.settings import Settings
 from swiftdrop.urls import host_of
 
@@ -44,7 +45,7 @@ class SiteMatcher(Protocol):
 
 @dataclass
 class LinkInfo:
-    provider: str  # "direct" | "ytdlp" | "auto" | "blocked"
+    provider: str  # "direct" | "ytdlp" | "spotify" | "auto" | "blocked"
     kind: MediaKind
     label: str
     extractor: str | None = None
@@ -63,11 +64,18 @@ class LinkInfo:
 
 
 class ProviderRegistry:
-    def __init__(self, direct: Provider, sites: SiteMatcher | None = None) -> None:
+    def __init__(self, direct: Provider, sites: SiteMatcher | None = None, spotify: Provider | None = None) -> None:
         self.direct = direct
         self.sites = sites
+        self.spotify = spotify  # Spotify songs saved from YouTube matches (needs the site engine)
 
     def classify(self, url: str) -> LinkInfo:
+        if self.spotify is not None:
+            spotify = parse_spotify_link(url)
+            if spotify is not None or is_short_link(url):
+                # Short links might be a playlist: they go through inspect, which resolves them.
+                playlist = spotify is None or spotify.kind != "track"
+                return LinkInfo("spotify", MediaKind.AUDIO, "Spotify", extractor="Spotify", playlist_hint=playlist)
         host = host_of(url)
         service = match_restricted(host)
         if service:
@@ -102,6 +110,8 @@ class ProviderRegistry:
             return self.direct
         if name == "ytdlp" and self.sites is not None:
             return self.sites
+        if name == "spotify" and self.spotify is not None:
+            return self.spotify
         if name == "auto":
             return _AutoProvider(self)
         raise failure("unsupported", f"no provider named {name}")
@@ -111,6 +121,8 @@ class ProviderRegistry:
             raise DownloadFailure(info.blocked)
         if info.provider == "ytdlp" and self.sites is not None:
             return self.sites.inspect(url, token, settings)
+        if info.provider == "spotify" and self.spotify is not None:
+            return self.spotify.inspect(url, token, settings)
         if info.provider == "auto" and self.site_match(url) is not None:
             return self.sites.inspect(url, token, settings)  # type: ignore[union-attr]
         try:

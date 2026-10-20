@@ -166,6 +166,12 @@ _CATALOG: dict[str, tuple[str, str, str, bool]] = {
         "Update SwiftDrop to get the latest download engine.",
         True,
     ),
+    "no_match": (
+        "No matching song found",
+        "SwiftDrop couldn't find this song on YouTube with the same title, artist and length.",
+        "It may not be on YouTube, or only as a live, remixed or cover version.",
+        False,
+    ),
     "integrity": (
         "Download incomplete",
         "The downloaded file is smaller than the server reported.",

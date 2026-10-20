@@ -423,8 +423,9 @@ function Tips() {
         </div>
       ))}
       <p className="col-span-3 mt-1 text-[11.5px] text-ink-3">
-        Only download media you own or have permission to save. DRM-protected services (Spotify, Netflix, Apple
-        Music…), private profiles and paywalled content aren't supported.
+        Only download media you own or have permission to save. Spotify songs are saved from matching YouTube
+        recordings. DRM-protected services (Netflix, Apple Music…), private profiles and paywalled content aren't
+        supported.
       </p>
     </div>
   );

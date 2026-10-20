@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 import uuid
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields, replace
 from enum import StrEnum
 from typing import Any
 
@@ -55,6 +55,14 @@ class DownloadOptions:
     @property
     def max_height(self) -> int | None:
         return int(self.quality) if self.quality.isdigit() else None
+
+    def as_audio(self) -> DownloadOptions:
+        """The same choices, audio only."""
+        return replace(self, quality="audio")
+
+    def for_provider(self, provider: str) -> DownloadOptions:
+        """Spotify songs are always saved as audio; every other link keeps the user's choice."""
+        return self.as_audio() if provider == "spotify" else self
 
     def label(self) -> str:
         if self.audio_only:

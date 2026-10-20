@@ -203,3 +203,15 @@ def test_banner_still_offers_other_links_when_enabled(service, ui):
     service.clipboard_detected("https://example.com/plain-page")
     assert service.tracker.drain().clipboard["urls"] == ["https://example.com/plain-page"]
     assert not ui.opened
+
+
+def test_spotify_song_pops_up_and_queues_as_audio(service, ui, tmp_path):
+    from swiftdrop.providers.spotify import SpotifyProvider
+
+    service.registry.spotify = SpotifyProvider(FakeSites())
+    service.settings.update({"default_quality": "1080"})
+    service.clipboard_detected("https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT?si=x")
+    info = service.capture.capture_public(opened(ui))
+    assert info["kind"] == "page" and info["media"] == "audio" and info["quality_label"] == "Audio · M4A"
+    job = service.queue.get(service.capture.decide(info["id"], "start", "", str(tmp_path / "Downloads"))["job_id"])
+    assert job.provider == "spotify" and job.options.audio_only and job.kind == MediaKind.AUDIO

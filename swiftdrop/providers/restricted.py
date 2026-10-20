@@ -18,18 +18,21 @@ class RestrictedService:
     domains: tuple[str, ...]
     message: str
     alternative: str
+    title: str | None = None
 
 
 _STREAMING_VIDEO = "Use the service's official app to download for offline viewing where your plan allows it."
 
 SERVICES: tuple[RestrictedService, ...] = (
+    # Songs, albums and playlists are handled by the Spotify provider (matched on YouTube);
+    # what's left here is podcasts, audiobooks and pages without a song list.
     RestrictedService(
         "Spotify",
         ("open.spotify.com", "play.spotify.com", "spotify.link", "spotify.app.link"),
-        "Spotify music and audiobooks are DRM-protected streams, so they can't be saved as files.",
-        "Use “Download” in the Spotify app (Premium) for offline listening, or buy DRM-free files from "
-        "stores such as Bandcamp. For podcasts, paste the show's public RSS feed URL instead — "
-        "SwiftDrop can download podcast episodes from RSS feeds.",
+        "Spotify podcasts and audiobooks are DRM-protected streams, so they can't be saved as files.",
+        "Songs, albums and playlists work: copy their link (Share → Copy link). For podcasts, paste the "
+        "show's public RSS feed URL instead — SwiftDrop can download podcast episodes from RSS feeds.",
+        title="This Spotify link isn't supported",
     ),
     RestrictedService(
         "Apple Music",
@@ -87,7 +90,7 @@ def restricted_error(service: RestrictedService) -> ErrorInfo:
     return make_error(
         "drm",
         f"{service.name} link",
-        title=f"{service.name} isn't supported",
+        title=service.title or f"{service.name} isn't supported",
         message=service.message,
         hint=service.alternative,
         retryable=False,

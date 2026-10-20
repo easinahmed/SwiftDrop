@@ -16,6 +16,8 @@ retries, playlists and a clean native-feeling interface.
   archives…), HLS/DASH streams, podcast RSS feeds, and the public video/audio sites supported by
   [yt-dlp](https://github.com/yt-dlp/yt-dlp). Quality and format selection is available, with FFmpeg
   merging and conversion bundled.
+- **Spotify songs, albums and playlists.** Saved as audio from the matching YouTube Music recording, named
+  and tagged with Spotify's title, artist and album.
 - **Respectful by design.** No DRM circumvention, no private-profile or paywall bypass. Passwords are
   never requested or stored.
 
@@ -93,15 +95,22 @@ Where files go:
   Dailymotion, Twitch VODs, TED, Mixcloud and many more. Also generic pages that embed HTML5
   `<video>`/`<audio>`.
 - Playlists, albums, channels and podcast RSS/Atom feeds, expanded into selectable items.
+- Spotify songs, albums and public playlists. Spotify's own audio is DRM-protected and is never touched:
+  SwiftDrop reads the song list from Spotify's public page (no sign-in), finds each song on YouTube Music
+  (then YouTube) with the same title and artist and a length within a few seconds, and saves that
+  recording as audio in your chosen format. A song without a close match is reported as "No matching
+  song found" instead of being guessed. Sound quality is YouTube's, not Spotify's. Without signing in,
+  Spotify lists only the first 100 songs of a playlist (albums and single songs are complete).
 - Instagram, Facebook, X, TikTok and similar: **public** posts where the site allows it. For media
   your own account can access, turn on *Settings → Privacy → Use browser sign-in*. Cookies are read
   from that browser only when a download starts, and are never stored or logged. Safari requires
   granting SwiftDrop Full Disk Access.
 
 **Not supported (by design)**
-- DRM-protected services: Spotify, Apple Music, Apple TV, Netflix, Disney+, Prime Video, Max, Hulu,
-  Paramount+, Peacock, TIDAL, Deezer, Amazon Music, Audible. These links are refused up front, with a
-  compliant alternative (the service's own offline mode, DRM-free stores, or a podcast's public RSS feed).
+- DRM-protected services: Apple Music, Apple TV, Netflix, Disney+, Prime Video, Max, Hulu, Paramount+,
+  Peacock, TIDAL, Deezer, Amazon Music, Audible, and Spotify podcasts and audiobooks. These links are
+  refused up front, with a compliant alternative (the service's own offline mode, DRM-free stores, or a
+  podcast's public RSS feed).
 - Private profiles, paywalls and other access controls. SwiftDrop never tries to get around them.
 - Live streams that are still in progress.
 
@@ -176,7 +185,7 @@ make test-network # also run opt-in tests that read public sites (metadata only)
 The compiled UI in `swiftdrop/ui/web/` is part of the repository, so the Python app runs without Node.
 Rebuild it with `make ui` after changing `frontend/`.
 
-**Tests.** There are 128 Python tests (127 local, plus 1 opt-in network test) and 7 frontend tests. Everything runs against local fixtures: a
+**Tests.** There are 421 Python tests (419 local, plus 2 opt-in network tests) and 17 frontend tests. Everything runs against local fixtures: a
 local HTTP server that can inject 503s, `Retry-After`, dropped connections, slow streams and missing
 `Range` support, plus HLS streams, RSS feeds and HTML5 pages generated with FFmpeg. No test depends on a
 live website unless you opt in with `SWIFTDROP_NETWORK_TESTS=1`.
@@ -261,5 +270,8 @@ version, run `make check` and `make dmg`, and ship a new release.
 - "Pause" for site downloads stops the transfer and keeps yt-dlp's partial files; resuming continues them.
   Some servers don't support resuming direct files. SwiftDrop then says so and restarts that file from
   the beginning.
+- Spotify playlists are read from Spotify's public embed page, which lists at most 100 songs and can
+  change without notice. If Spotify changes it, Spotify links fail with "Couldn't read this Spotify link"
+  until SwiftDrop is updated.
 - The project has no licence file yet. Choose one before publishing, and keep it compatible with the
   bundled components (FFmpeg GPL, yt-dlp Unlicense, pywebview BSD, PyObjC MIT).

@@ -90,7 +90,7 @@ export interface Collection {
 }
 
 export interface LinkInfo {
-  provider: "direct" | "ytdlp" | "auto" | "blocked";
+  provider: "direct" | "ytdlp" | "spotify" | "auto" | "blocked";
   kind: MediaKind;
   label: string;
   extractor: string | null;
