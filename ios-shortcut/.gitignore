@@ -1,0 +1,3 @@
+# The repo ignores dist/ everywhere; the signed shortcut here is the download
+# we hand out, so keep it. The unsigned build in build/ stays ignored.
+!dist/
