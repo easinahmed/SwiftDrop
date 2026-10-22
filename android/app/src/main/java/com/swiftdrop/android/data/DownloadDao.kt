@@ -65,7 +65,7 @@ interface DownloadDao {
     @Query(
         "UPDATE downloads SET status = 'COMPLETED', progress = 100, speed = NULL, error = NULL, " +
             "fileUri = :fileUri, fileName = :fileName, mimeType = :mimeType, sizeBytes = :sizeBytes, " +
-            "updatedAt = :now WHERE id = :id"
+            "savedTo = :savedTo, updatedAt = :now WHERE id = :id"
     )
     suspend fun setCompleted(
         id: Long,
@@ -73,23 +73,38 @@ interface DownloadDao {
         fileName: String,
         mimeType: String,
         sizeBytes: Long,
+        savedTo: String?,
         now: Long = System.currentTimeMillis(),
     )
+
+    // -- Storage and history -----------------------------------------------------------------------
+
+    /** Removes every finished, failed or cancelled row; files stay where they were saved. */
+    @Query("DELETE FROM downloads WHERE status NOT IN ('QUEUED', 'RUNNING')")
+    suspend fun deleteInactive()
+
+    /** Albums and playlists left without songs. */
+    @Query("DELETE FROM download_groups WHERE id NOT IN (SELECT DISTINCT groupId FROM downloads WHERE groupId IS NOT NULL)")
+    suspend fun deleteEmptyGroups()
+
+    @Query("SELECT id FROM downloads WHERE status IN ('QUEUED', 'RUNNING')")
+    suspend fun activeIds(): List<Long>
 
     // -- Spotify ---------------------------------------------------------------------------------
 
     @Query("UPDATE downloads SET spotify = :spotify, updatedAt = :now WHERE id = :id")
     suspend fun setSpotify(id: Long, spotify: String, now: Long = System.currentTimeMillis())
 
-    @Query("SELECT * FROM downloads WHERE kind = 'spotify_song' AND status = 'RUNNING'")
-    suspend fun runningSongs(): List<DownloadEntity>
+    /** Downloads holding a slot: links and Spotify songs (reading a Spotify link doesn't count). */
+    @Query("SELECT * FROM downloads WHERE (kind IS NULL OR kind = 'spotify_song') AND status = 'RUNNING'")
+    suspend fun runningDownloads(): List<DownloadEntity>
 
     /** Oldest share first, then album/playlist order. */
     @Query(
-        "SELECT * FROM downloads WHERE kind = 'spotify_song' AND status = 'QUEUED' " +
+        "SELECT * FROM downloads WHERE (kind IS NULL OR kind = 'spotify_song') AND status = 'QUEUED' " +
             "ORDER BY createdAt ASC, id ASC LIMIT :limit"
     )
-    suspend fun nextQueuedSongs(limit: Int): List<DownloadEntity>
+    suspend fun nextQueued(limit: Int): List<DownloadEntity>
 
     @Query("SELECT * FROM downloads WHERE groupId = :groupId ORDER BY id ASC")
     suspend fun songsInGroup(groupId: Long): List<DownloadEntity>

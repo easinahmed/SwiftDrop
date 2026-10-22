@@ -36,8 +36,8 @@ android {
         applicationId = "com.swiftdrop.android"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = 3
+        versionName = "1.2.0"
 
         ndk {
             // yt-dlp's bundled Python and FFmpeg are native; ship only the two phone ABIs.
@@ -57,6 +57,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Installs next to the signed release build, so testing never replaces its history.
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+        }
         release {
             // youtubedl-android ships no consumer keep rules and maps yt-dlp JSON with Jackson
             // reflection, so R8 stays off rather than risk stripping what it needs at runtime.
@@ -112,6 +117,8 @@ dependencies {
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.androidx.datastore.preferences)
+    implementation(libs.androidx.documentfile)
     implementation(libs.youtubedl.library)
     implementation(libs.youtubedl.ffmpeg)
 

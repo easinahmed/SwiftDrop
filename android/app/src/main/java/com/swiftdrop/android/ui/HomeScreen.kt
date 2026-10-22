@@ -69,6 +69,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.swiftdrop.android.R
 import com.swiftdrop.android.core.Quality
 import com.swiftdrop.android.core.SavePaths
+import com.swiftdrop.android.data.AppSettings
 import com.swiftdrop.android.data.DownloadEntity
 import com.swiftdrop.android.data.DownloadStatus
 import com.swiftdrop.android.download.DownloadWorker
@@ -82,7 +83,7 @@ fun HomeScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit) {
     val items by viewModel.items.collectAsStateWithLifecycle()
     val collapsed = remember { mutableStateMapOf<Long, Boolean>() }
     val engineState by viewModel.engineState.collectAsStateWithLifecycle()
-    val quality by viewModel.quality.collectAsStateWithLifecycle()
+    val settings by viewModel.settings.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val context = LocalContext.current
 
@@ -115,7 +116,7 @@ fun HomeScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item(key = "link") {
-                LinkCard(quality = quality, engineState = engineState, onDownload = viewModel::download)
+                LinkCard(settings = settings, engineState = engineState, onDownload = viewModel::download)
             }
             item(key = "header") {
                 Text(
@@ -172,7 +173,7 @@ fun HomeScreen(viewModel: MainViewModel, onOpenSettings: () -> Unit) {
 }
 
 @Composable
-private fun LinkCard(quality: Quality, engineState: EngineState, onDownload: (String) -> Boolean) {
+private fun LinkCard(settings: AppSettings, engineState: EngineState, onDownload: (String) -> Boolean) {
     val context = LocalContext.current
     val focus = LocalFocusManager.current
     var text by rememberSaveable { mutableStateOf("") }
@@ -230,7 +231,15 @@ private fun LinkCard(quality: Quality, engineState: EngineState, onDownload: (St
             val hint = when (engineState) {
                 is EngineState.Failed -> "Download engine unavailable: ${engineState.message}"
                 EngineState.Initializing -> "Preparing the download engine…"
-                is EngineState.Ready -> "${quality.label} · saves to ${SavePaths.RELATIVE_PATH} · or Share → SwiftDrop from any app"
+                is EngineState.Ready -> {
+                    val quality = if (settings.quality.isAudio) {
+                        "Audio (${settings.audioFormat.label})"
+                    } else {
+                        "${settings.quality.label} ${settings.videoFormat.label}"
+                    }
+                    val folder = settings.downloadTreeLabel ?: SavePaths.RELATIVE_PATH
+                    "$quality · saves to $folder · or Share → SwiftDrop from any app"
+                }
             }
             Text(
                 hint,
@@ -459,7 +468,7 @@ private fun statusLine(context: Context, item: DownloadEntity, showFolder: Boole
         DownloadStatus.COMPLETED -> buildString {
             append("Saved")
             if (item.sizeBytes > 0) append(" · ").append(Formatter.formatShortFileSize(context, item.sizeBytes))
-            if (showFolder) append(" · ").append(SavePaths.relativePath(item.folder))
+            if (showFolder) append(" · ").append(item.savedTo ?: SavePaths.relativePath(item.folder))
         }
         DownloadStatus.FAILED -> item.error ?: "Failed"
         DownloadStatus.CANCELLED -> "Cancelled"

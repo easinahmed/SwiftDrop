@@ -7,19 +7,24 @@ import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import com.swiftdrop.android.SwiftDropApp
 import com.swiftdrop.android.core.LinkExtractor
+import com.swiftdrop.android.core.Quality
 import com.swiftdrop.android.core.SavePaths
 import com.swiftdrop.android.data.Settings
+import com.swiftdrop.android.data.ShareAction
 import com.swiftdrop.android.download.Downloads
 import com.swiftdrop.android.spotify.SpotifyLinks
+import com.swiftdrop.android.ui.theme.SwiftDropTheme
 import kotlinx.coroutines.launch
 
 /**
- * Invisible share target: "Share → SwiftDrop" or "Open with SwiftDrop".
- * Queues the download at the default quality and gets out of the way immediately.
+ * Share target: "Share → SwiftDrop" or "Open with SwiftDrop".
+ * By default it queues the download at the default quality and gets out of the way immediately;
+ * with "Ask quality first" (Settings) it shows a small sheet of qualities first.
  * A Spotify song, album or playlist is read in the background and saved as audio.
  */
 class ShareActivity : ComponentActivity() {
@@ -27,10 +32,16 @@ class ShareActivity : ComponentActivity() {
     private val permissionRequest =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { finish() }
 
+    /** The link waiting for a quality choice, kept across re-creation (e.g. rotation). */
+    private var pendingUrl: String? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // Re-created while a permission dialog is up: the download is already queued.
-        if (savedInstanceState != null) return
+        if (savedInstanceState != null) {
+            // Re-created while the quality sheet or a permission dialog is up.
+            savedInstanceState.getString(KEY_PENDING_URL)?.let(::askQuality)
+            return
+        }
 
         val url = linkFrom(intent)
         if (url == null) {
@@ -46,8 +57,45 @@ class ShareActivity : ComponentActivity() {
             return
         }
 
+        val settings = Settings.get(this).current
+        if (settings.shareAction == ShareAction.ASK && !SpotifyLinks.isSpotify(url)) {
+            askQuality(url)
+        } else {
+            start(url, settings.quality)
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        pendingUrl?.let { outState.putString(KEY_PENDING_URL, it) }
+    }
+
+    private fun askQuality(url: String) {
+        pendingUrl = url
+        setContent {
+            val settings = Settings.get(this).current
+            SwiftDropTheme(settings.theme) {
+                QualitySheet(
+                    host = LinkExtractor.hostOf(url),
+                    defaultQuality = settings.quality,
+                    audioLabel = settings.audioFormat.label,
+                    videoLabel = settings.videoFormat.label,
+                    onPick = { quality ->
+                        pendingUrl = null
+                        start(url, quality)
+                    },
+                    onCancel = {
+                        pendingUrl = null
+                        finish()
+                    },
+                )
+            }
+        }
+    }
+
+    private fun start(url: String, quality: Quality) {
         val app = applicationContext
-        SwiftDropApp.scope.launch { Downloads.enqueue(app, url) }
+        SwiftDropApp.scope.launch { Downloads.enqueue(app, url, quality) }
         val started = if (SpotifyLinks.isSpotify(url)) "Getting Spotify songs…" else "Downloading with SwiftDrop…"
         Toast.makeText(this, started, Toast.LENGTH_SHORT).show()
 
@@ -71,10 +119,10 @@ class ShareActivity : ComponentActivity() {
     /** Notifications (asked once, Android 13+) or legacy storage (Android 8–9, needed to save). */
     private fun permissionToAsk(): String? {
         val settings = Settings.get(this)
-        if (Build.VERSION.SDK_INT >= 33 && !settings.notificationPermissionAsked &&
+        if (Build.VERSION.SDK_INT >= 33 && !settings.current.notificationPermissionAsked &&
             !granted(Manifest.permission.POST_NOTIFICATIONS)
         ) {
-            settings.notificationPermissionAsked = true
+            settings.set { it.copy(notificationPermissionAsked = true) }
             return Manifest.permission.POST_NOTIFICATIONS
         }
         if (SavePaths.needsLegacyWritePermission(Build.VERSION.SDK_INT) &&
@@ -87,4 +135,8 @@ class ShareActivity : ComponentActivity() {
 
     private fun granted(permission: String) =
         ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
+
+    private companion object {
+        const val KEY_PENDING_URL = "pending_url"
+    }
 }

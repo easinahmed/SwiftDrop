@@ -24,10 +24,11 @@ object Downloads {
     fun workName(id: Long) = "download-$id"
 
     /**
-     * Records a new download and schedules it. Returns the history row id. A Spotify link is
-     * first read (a quick job that lists its songs); each song then waits for its turn.
+     * Records a new download and queues it; [DownloadQueue] starts it when a slot is free. Returns
+     * the history row id. A Spotify link is first read (a quick job that lists its songs); each
+     * song then waits for its turn like any other download.
      */
-    suspend fun enqueue(context: Context, url: String, quality: Quality = Settings.get(context).quality.value): Long {
+    suspend fun enqueue(context: Context, url: String, quality: Quality = Settings.get(context).current.quality): Long {
         val app = context.applicationContext
         val dao = AppDatabase.get(app).downloads()
         if (SpotifyLinks.isSpotify(url)) {
@@ -43,7 +44,7 @@ object Downloads {
             return id
         }
         val id = dao.insert(DownloadEntity(url = url, quality = quality.name))
-        schedule(app, id)
+        DownloadQueue.pump(app)
         return id
     }
 
@@ -56,11 +57,10 @@ object Downloads {
         dao.resetForRetry(id, item.quality)
         when {
             item.isSpotifyLink -> schedule(app, id, SpotifyResolveWorker::class)
-            item.isSpotifySong -> {
+            else -> {
                 item.groupId?.let { Notifications.updateGroup(app, it) }
-                SongQueue.pump(app)
+                DownloadQueue.pump(app)
             }
-            else -> schedule(app, id)
         }
     }
 
@@ -72,13 +72,11 @@ object Downloads {
         WorkManager.getInstance(app).cancelUniqueWork(workName(id))
         Notifications.clearProgress(app, id)
         val item = dao.get(id)
-        if (item?.isSpotifySong == true) {
-            item.groupId?.let { Notifications.updateGroup(app, it) }
-            SongQueue.pump(app)
-        }
+        item?.groupId?.let { Notifications.updateGroup(app, it) }
+        if (item?.isSpotifyLink != true) DownloadQueue.pump(app)
     }
 
-    /** Removes the entry from the history. The saved file stays in Download/SwiftDrop. */
+    /** Removes the entry from the history. The saved file stays where it was saved. */
     suspend fun remove(context: Context, id: Long) {
         val app = context.applicationContext
         val dao = AppDatabase.get(app).downloads()
@@ -94,13 +92,13 @@ object Downloads {
     }
 
     /** Cancels the songs of an album or playlist that haven't finished. */
-    suspend fun cancelGroup(context: Context, groupId: Long) = SongQueue.cancelGroup(context, groupId)
+    suspend fun cancelGroup(context: Context, groupId: Long) = DownloadQueue.cancelGroup(context, groupId)
 
     /** Removes an album or playlist and its songs from the history. The files stay. */
     suspend fun removeGroup(context: Context, groupId: Long) {
         val app = context.applicationContext
         val dao = AppDatabase.get(app).downloads()
-        SongQueue.cancelGroup(app, groupId)
+        DownloadQueue.cancelGroup(app, groupId)
         dao.songsInGroup(groupId).forEach { Notifications.clear(app, it.id) }
         dao.deleteGroupSongs(groupId)
         dao.deleteGroup(groupId)
@@ -112,7 +110,7 @@ object Downloads {
         id: Long,
         worker: KClass<out ListenableWorker> = DownloadWorker::class,
     ) {
-        val wifiOnly = Settings.get(context).wifiOnly.value
+        val wifiOnly = Settings.get(context).current.wifiOnly
         val request = OneTimeWorkRequest.Builder(worker.java)
             .setInputData(workDataOf(DownloadWorker.KEY_DOWNLOAD_ID to id))
             .setConstraints(
@@ -123,6 +121,14 @@ object Downloads {
             .addTag(TAG)
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork(workName(id), ExistingWorkPolicy.REPLACE, request).await()
+    }
+
+    /** Clears the list of finished, failed and cancelled downloads. Files stay where they were saved. */
+    suspend fun clearHistory(context: Context) {
+        val app = context.applicationContext
+        val dao = AppDatabase.get(app).downloads()
+        dao.deleteInactive()
+        dao.deleteEmptyGroups()
     }
 
     const val SPOTIFY = "Spotify"

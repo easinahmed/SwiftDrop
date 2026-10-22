@@ -18,10 +18,10 @@ import androidx.core.content.ContextCompat
 import androidx.work.ForegroundInfo
 import androidx.work.WorkManager
 import com.swiftdrop.android.R
-import com.swiftdrop.android.core.SavePaths
 import com.swiftdrop.android.data.AppDatabase
 import com.swiftdrop.android.data.DownloadGroupEntity
 import com.swiftdrop.android.data.GroupSummary
+import com.swiftdrop.android.data.Settings
 import com.swiftdrop.android.ui.MainActivity
 import java.util.UUID
 import kotlin.math.roundToInt
@@ -32,6 +32,8 @@ object Notifications {
 
     const val CHANNEL_PROGRESS = "downloads"
     const val CHANNEL_RESULTS = "download_results"
+    /** Used instead of [CHANNEL_PROGRESS] when progress notifications are off in Settings. */
+    const val CHANNEL_QUIET = "downloads_quiet"
 
     fun progressId(downloadId: Long): Int = (100_000 + downloadId * 2).toInt()
     fun resultId(downloadId: Long): Int = (100_000 + downloadId * 2 + 1).toInt()
@@ -53,7 +55,16 @@ object Notifications {
                 description = "Saved files and download errors"
             }
         )
+        manager.createNotificationChannel(
+            NotificationChannel(CHANNEL_QUIET, "Background downloads", NotificationManager.IMPORTANCE_MIN).apply {
+                description = "Shown when progress notifications are off; Android needs one while downloading"
+                setShowBadge(false)
+            }
+        )
     }
+
+    /** "Show progress notifications" in Settings. */
+    fun progressEnabled(context: Context): Boolean = Settings.get(context).current.progressNotifications
 
     fun canPost(context: Context): Boolean {
         if (Build.VERSION.SDK_INT >= 33 &&
@@ -77,6 +88,7 @@ object Notifications {
         percent: Float?,
         speed: String?,
     ): Notification {
+        if (!progressEnabled(context)) return quietNotification(context, workId)
         val text = when {
             percent == null -> "Preparing…"
             speed != null -> "${percent.roundToInt()}% · $speed"
@@ -100,6 +112,23 @@ object Notifications {
             .build()
     }
 
+    /** The one silent notification Android requires while a download runs with progress turned off. */
+    private fun quietNotification(context: Context, workId: UUID): Notification =
+        NotificationCompat.Builder(context, CHANNEL_QUIET)
+            .setSmallIcon(R.drawable.ic_stat_download)
+            .setContentTitle("Downloading")
+            .setOngoing(true)
+            .setSilent(true)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setCategory(NotificationCompat.CATEGORY_PROGRESS)
+            .setContentIntent(openAppIntent(context))
+            .addAction(
+                R.drawable.ic_close,
+                "Cancel",
+                WorkManager.getInstance(context).createCancelPendingIntent(workId),
+            )
+            .build()
+
     fun foregroundInfo(
         context: Context,
         downloadId: Long,
@@ -117,10 +146,20 @@ object Notifications {
     }
 
     fun showProgress(context: Context, downloadId: Long, workId: UUID, title: String, percent: Float?, speed: String?) {
+        if (!progressEnabled(context)) return
         notify(context, progressId(downloadId), progressNotification(context, workId, title, percent, speed))
     }
 
-    fun showCompleted(context: Context, downloadId: Long, title: String, uri: Uri, mimeType: String, fileCount: Int) {
+    fun showCompleted(
+        context: Context,
+        downloadId: Long,
+        title: String,
+        uri: Uri,
+        mimeType: String,
+        fileCount: Int,
+        location: String,
+        note: String? = null,
+    ) {
         val view = Intent(Intent.ACTION_VIEW)
             .setDataAndType(uri, mimeType)
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -130,12 +169,13 @@ object Notifications {
             view,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val where = "Saved to ${SavePaths.RELATIVE_PATH}"
-        val text = if (fileCount > 1) "$fileCount files · $where" else where
+        val where = "Saved to $location"
+        val text = listOfNotNull(if (fileCount > 1) "$fileCount files" else null, where, note).joinToString(" · ")
         val notification = NotificationCompat.Builder(context, CHANNEL_RESULTS)
             .setSmallIcon(R.drawable.ic_stat_download)
             .setContentTitle(title)
             .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setContentIntent(openFile)
             .setAutoCancel(true)
             .setCategory(NotificationCompat.CATEGORY_STATUS)
@@ -186,6 +226,8 @@ object Notifications {
         groupLock.withLock {
             val group = dao.getGroup(groupId) ?: return
             val summary = GroupSummary.of(dao.songsInGroup(groupId))
+            // With progress notifications off, an album or playlist only reports when it's done.
+            if (summary.isActive && !progressEnabled(context)) return
             notify(context, groupId(groupId), groupNotification(context, group, summary, null))
         }
     }
@@ -198,14 +240,15 @@ object Notifications {
         summary: GroupSummary,
         headline: String?,
     ): Notification {
-        val where = SavePaths.relativePath(group.name)
+        val settings = Settings.get(context).current
+        val where = MediaSaver.folderFor(settings, "audio/mp4", group.name).displayPath
         val builder = NotificationCompat.Builder(context, CHANNEL_RESULTS)
             .setSmallIcon(R.drawable.ic_stat_download)
             .setContentIntent(openAppIntent(context))
             .setOnlyAlertOnce(true)
         if (summary.isActive) {
             val text = if (headline != null) {
-                "Downloading ${SongQueue.MAX_PARALLEL} at a time to $where"
+                "Downloading ${DownloadQueue.maxParallel(context)} at a time to $where"
             } else {
                 summary.line()
             }

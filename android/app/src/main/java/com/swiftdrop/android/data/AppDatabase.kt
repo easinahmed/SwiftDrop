@@ -7,7 +7,7 @@ import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
-@Database(entities = [DownloadEntity::class, DownloadGroupEntity::class], version = 2, exportSchema = false)
+@Database(entities = [DownloadEntity::class, DownloadGroupEntity::class], version = 3, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun downloads(): DownloadDao
@@ -27,6 +27,13 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** 1.1 → 1.2: where each file was saved (folders are a setting now). Keeps the download history. */
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `downloads` ADD COLUMN `savedTo` TEXT")
+            }
+        }
+
         private const val CREATE_GROUPS = "CREATE TABLE IF NOT EXISTS `download_groups` (" +
             "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `sourceUrl` TEXT NOT NULL, `name` TEXT NOT NULL, " +
             "`kind` TEXT NOT NULL, `imageUrl` TEXT, `partial` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL)"
@@ -37,7 +44,7 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "swiftdrop.db",
-                ).addMigrations(MIGRATION_1_2).build().also { instance = it }
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { instance = it }
             }
     }
 }

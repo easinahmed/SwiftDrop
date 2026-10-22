@@ -25,7 +25,7 @@ import kotlinx.coroutines.withContext
 
 /**
  * Reads a shared Spotify link (a few seconds): a song becomes one queued download; an album or
- * playlist becomes a group with one queued download per song. [SongQueue] then runs them,
+ * playlist becomes a group with one queued download per song. [DownloadQueue] then runs them,
  * a few at a time, through [DownloadWorker].
  */
 class SpotifyResolveWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
@@ -53,7 +53,7 @@ class SpotifyResolveWorker(context: Context, params: WorkerParameters) : Corouti
             // The song rows are new, with their own work: this job's unique work name (its row's)
             // must not be reused while it is still running, or WorkManager would cancel it.
             dao.delete(downloadId)
-            SongQueue.pump(ctx)
+            DownloadQueue.pump(ctx)
             Result.success()
         } catch (e: CancellationException) {
             withContext(NonCancellable) {

@@ -14,41 +14,35 @@ import com.swiftdrop.android.download.Downloads
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.flow.first
 
-/** Keeps yt-dlp fresh: checks the stable channel at most once a week, never mid-download. */
+/**
+ * Keeps yt-dlp fresh while the app isn't opened: looks once a day and updates when the engine is
+ * more than three days old ("Auto-update engine" in Settings), never mid-download.
+ */
 class EngineUpdateWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
-        val settings = Settings.get(applicationContext)
-        val now = System.currentTimeMillis()
-        if (now - settings.lastEngineCheck < MIN_INTERVAL_MS) return Result.success()
-
+        if (!Settings.get(applicationContext).current.engineAutoUpdate) return Result.success()
         val busy = WorkManager.getInstance(applicationContext)
             .getWorkInfosByTagFlow(Downloads.TAG)
             .first()
             .any { it.state == WorkInfo.State.RUNNING }
-        if (busy) return Result.retry()
-
-        return when (Engine.update(applicationContext)) {
-            is EngineUpdateResult.Failed -> Result.retry()
-            else -> {
-                settings.lastEngineCheck = now
-                Result.success()
-            }
-        }
+        if (busy) return Result.success() // tomorrow, or the next app start
+        Engine.awaitReady()
+        Engine.updateIfStale(applicationContext)
+        return Result.success()
     }
 
     companion object {
         private const val UNIQUE_NAME = "engine-weekly-update"
-        private val MIN_INTERVAL_MS = TimeUnit.DAYS.toMillis(6) + TimeUnit.HOURS.toMillis(12)
 
-        /** Call at start-up and whenever "Wi-Fi only" changes; keeps the existing weekly cadence. */
+        /** Call at start-up and whenever "Wi-Fi only" changes. */
         fun schedule(context: Context) {
-            val request = PeriodicWorkRequestBuilder<EngineUpdateWorker>(7, TimeUnit.DAYS)
-                .setInitialDelay(1, TimeUnit.DAYS)
+            val request = PeriodicWorkRequestBuilder<EngineUpdateWorker>(1, TimeUnit.DAYS)
+                .setInitialDelay(6, TimeUnit.HOURS)
                 .setConstraints(
                     Constraints.Builder()
                         .setRequiredNetworkType(
-                            if (Settings.get(context).wifiOnly.value) NetworkType.UNMETERED else NetworkType.CONNECTED
+                            if (Settings.get(context).current.wifiOnly) NetworkType.UNMETERED else NetworkType.CONNECTED
                         )
                         .setRequiresBatteryNotLow(true)
                         .build()

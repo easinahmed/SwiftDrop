@@ -33,10 +33,12 @@ data class DownloadEntity(
     val kind: String? = null,
     /** The Spotify album or playlist ([DownloadGroupEntity]) this song belongs to. */
     val groupId: Long? = null,
-    /** Sub-folder of Download/SwiftDrop: the album or playlist name. */
+    /** The album or playlist name: its own folder when that setting is on. */
     val folder: String? = null,
     /** The Spotify song and, once found, its YouTube match (SongState JSON). */
     val spotify: String? = null,
+    /** Where the finished file went, as shown to the user ("Download/SwiftDrop/Music"). Null before 1.2. */
+    val savedTo: String? = null,
 ) {
     val isSpotifySong: Boolean get() = kind == KIND_SPOTIFY_SONG
     val isSpotifyLink: Boolean get() = kind == KIND_SPOTIFY_LINK

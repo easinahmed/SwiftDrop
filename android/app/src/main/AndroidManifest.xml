@@ -55,6 +55,12 @@
             </intent-filter>
         </activity>
 
+        <!-- Settings → YouTube account → Sign in: a WebView whose cookies are kept for yt-dlp. -->
+        <activity
+            android:name=".youtube.YouTubeLoginActivity"
+            android:exported="false"
+            android:label="Sign in to YouTube" />
+
         <receiver
             android:name=".download.NotificationActionReceiver"
             android:exported="false" />

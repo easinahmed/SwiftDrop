@@ -1,53 +1,96 @@
 package com.swiftdrop.android.data
 
 import android.content.Context
-import android.content.SharedPreferences
-import com.swiftdrop.android.core.Quality
+import android.util.Log
+import androidx.datastore.core.DataStore
+import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
+import androidx.datastore.migrations.SharedPreferencesMigration
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.emptyPreferences
+import androidx.datastore.preferences.preferencesDataStoreFile
+import com.swiftdrop.android.SwiftDropApp
+import java.io.IOException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 
-/** Small synchronous settings store; ShareActivity must read the quality instantly. */
-class Settings private constructor(private val prefs: SharedPreferences) {
+/**
+ * User settings in DataStore, exposed as one [StateFlow] so the share sheet, workers and
+ * notifications can read them instantly. The first read (and the one-time hand-over from
+ * SwiftDrop 1.1's SharedPreferences) happens when the app process starts.
+ */
+class Settings private constructor(context: Context, private val scope: CoroutineScope) {
 
-    private val _quality = MutableStateFlow(Quality.fromKey(prefs.getString(KEY_QUALITY, null)))
-    val quality: StateFlow<Quality> = _quality.asStateFlow()
+    private val store: DataStore<Preferences> = PreferenceDataStoreFactory.create(
+        corruptionHandler = ReplaceFileCorruptionHandler { emptyPreferences() },
+        migrations = listOf(
+            SharedPreferencesMigration<Preferences>(
+                context = context,
+                sharedPreferencesName = LegacySettings.PREFS_NAME,
+                keysToMigrate = LegacySettings.KEYS,
+                migrate = { old, prefs -> LegacySettings.migrate(old.getAll(), prefs.toMutablePreferences()) },
+            )
+        ),
+        scope = scope,
+        produceFile = { context.preferencesDataStoreFile(FILE_NAME) },
+    )
 
-    private val _wifiOnly = MutableStateFlow(prefs.getBoolean(KEY_WIFI_ONLY, false))
-    val wifiOnly: StateFlow<Boolean> = _wifiOnly.asStateFlow()
+    private val _state = MutableStateFlow(runBlocking { readOnce() })
+    val state: StateFlow<AppSettings> = _state.asStateFlow()
 
-    fun setQuality(quality: Quality) {
-        prefs.edit().putString(KEY_QUALITY, quality.name).apply()
-        _quality.value = quality
+    /** The settings right now. */
+    val current: AppSettings get() = _state.value
+
+    init {
+        scope.launch {
+            store.data
+                .catch { e -> if (e is IOException) emit(emptyPreferences()) else throw e }
+                .map(SettingsKeys::read)
+                .collect { _state.value = it }
+        }
     }
 
-    fun setWifiOnly(enabled: Boolean) {
-        prefs.edit().putBoolean(KEY_WIFI_ONLY, enabled).apply()
-        _wifiOnly.value = enabled
+    private suspend fun readOnce(): AppSettings = try {
+        SettingsKeys.read(store.data.first())
+    } catch (e: IOException) {
+        Log.w(TAG, "Settings unreadable; using defaults", e)
+        AppSettings()
     }
 
-    var notificationPermissionAsked: Boolean
-        get() = prefs.getBoolean(KEY_NOTIFICATION_ASKED, false)
-        set(value) = prefs.edit().putBoolean(KEY_NOTIFICATION_ASKED, value).apply()
+    /** Applies [transform] atomically and returns the new settings. */
+    suspend fun update(transform: (AppSettings) -> AppSettings): AppSettings {
+        var next = current
+        store.edit { prefs ->
+            next = transform(SettingsKeys.read(prefs))
+            SettingsKeys.write(prefs, next)
+        }
+        _state.value = next
+        return next
+    }
 
-    var lastEngineCheck: Long
-        get() = prefs.getLong(KEY_LAST_ENGINE_CHECK, 0L)
-        set(value) = prefs.edit().putLong(KEY_LAST_ENGINE_CHECK, value).apply()
+    /** Fire-and-forget [update] for UI callbacks. */
+    fun set(transform: (AppSettings) -> AppSettings) {
+        scope.launch { update(transform) }
+    }
 
     companion object {
-        private const val KEY_QUALITY = "quality"
-        private const val KEY_WIFI_ONLY = "wifi_only"
-        private const val KEY_NOTIFICATION_ASKED = "notification_permission_asked"
-        private const val KEY_LAST_ENGINE_CHECK = "last_engine_check"
+        private const val TAG = "SwiftDropSettings"
+        private const val FILE_NAME = "settings"
 
         @Volatile
         private var instance: Settings? = null
 
         fun get(context: Context): Settings =
             instance ?: synchronized(this) {
-                instance ?: Settings(
-                    context.applicationContext.getSharedPreferences("settings", Context.MODE_PRIVATE)
-                ).also { instance = it }
+                instance ?: Settings(context.applicationContext, SwiftDropApp.scope).also { instance = it }
             }
     }
 }

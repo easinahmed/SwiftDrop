@@ -73,44 +73,71 @@ cancel, retry, open, share or remove each one. Removing an entry leaves the file
 
 It uses the same yt-dlp engine as the desktop app, via
 [youtubedl-android](https://github.com/JunkFood02/youtubedl-android), with Python and FFmpeg bundled. It
-handles the sites yt-dlp supports, plus direct file links.
+handles the sites yt-dlp supports, plus direct file links. SwiftDrop keeps the engine current by itself:
+when yt-dlp is more than three days old it updates in the background, at start-up and before the first
+YouTube download of a session.
+
+**When YouTube says "Sign in to confirm you're not a bot":** YouTube often blocks downloads from mobile
+networks (carriers share one address among many phones). When yt-dlp hits a bot check, sign-in wall or
+refused streams on a YouTube link, SwiftDrop tries the same video once more through a public
+[cobalt](https://github.com/imputnet/cobalt) server, at your quality (up to 1080p) and format. The entry
+then says **via cobalt**. If that fails too, the message says what to do: use Wi-Fi, or sign in to
+YouTube in Settings. The server list is `CobaltInstances.DEFAULT` in
+`android/app/src/main/java/com/swiftdrop/android/cobalt/Cobalt.kt`.
 
 **Spotify songs, albums and playlists** work the same way as on the desktop. Share a Spotify link (or a
 `spotify.link` short link) to SwiftDrop, or paste it in the app. SwiftDrop reads the song list from
 Spotify's public embed page (no sign-in), finds each song on YouTube Music (then YouTube), and saves it
-as audio (`.m4a`), named and tagged `Artist - Title`. Spotify's own audio is DRM-protected and is never
-touched.
+as audio (`.m4a` by default, or the audio format in Settings), named and tagged `Artist - Title`.
+Spotify's own audio is DRM-protected and is never touched.
 
 - A song needs the same title and artist on YouTube and a length within a few seconds. Live, remix,
   cover and similar versions only count when the Spotify title says so too. A song with no such match
   shows **No match found** and isn't downloaded on a guess. Sound quality is YouTube's, not Spotify's.
-- A single song goes to `Download/SwiftDrop`. An album or playlist goes to
-  `Download/SwiftDrop/<album or playlist name>` and appears in the list as one entry. That entry shows its
-  songs and progress ("12 of 50 done · 2 not found"), and has **Cancel all**.
-- Songs download 3 at a time, as audio, whatever the default quality is.
+- A single song goes to the download folder. An album or playlist goes to a folder named after it and
+  appears in the list as one entry. That entry shows its songs and progress ("12 of 50 done · 2 not
+  found"), and has **Cancel all**.
+- Songs download as audio, whatever the default quality is, and wait their turn like other downloads.
 - Without signing in, Spotify lists only the first 100 songs of a playlist. Albums and single songs are
   complete. Private playlists, podcasts and audiobooks aren't supported.
 
 **Install**
 
-1. Copy `SwiftDrop-Android-1.1.0.apk` to the phone and open it.
+1. Copy `SwiftDrop-Android-1.2.0.apk` to the phone and open it. It installs over 1.0 and 1.1 and keeps
+   your download list and settings.
 2. Android asks you to allow **Install unknown apps** for the app you opened it from (Files, Chrome…).
    Allow it, go back and tap **Install**.
 3. Open SwiftDrop once. Allow notifications so you can see progress and finished downloads.
 
 **Requirements:** Android 8.0 (API 26) or later, on an ARM phone (arm64-v8a or armeabi-v7a).
 
-**Where files go:** `Download/SwiftDrop` in the phone's shared storage. Galleries, music players and the
-Files app all see it. Android 10 and later save there through MediaStore, which needs no storage
-permission. On Android 8–9, SwiftDrop asks for storage access, which saving needs.
+**Where files go:** `Download/SwiftDrop` in the phone's shared storage by default. Galleries, music
+players and the Files app all see it. Android 10 and later save there through MediaStore, which needs no
+storage permission. On Android 8–9, SwiftDrop asks for storage access, which saving needs. You can pick
+another folder in Settings.
 
 **Settings:**
 
-- **Default quality:** Best, 1080p (the default), 720p, 480p, or Audio only (m4a). Videos prefer MP4
-  (H.264 + AAC), merged into `.mp4`.
-- **Wi-Fi only:** downloads wait for an unmetered network.
-- **Update download engine:** updates yt-dlp from its stable channel. SwiftDrop also checks for an
-  update once a week in the background. If YouTube downloads start failing, update the engine first.
+- **Downloads:** the download folder (`Download/SwiftDrop`, or **Choose folder…** for any folder you
+  pick, with **Reset to default**); separate `Videos`, `Music` and `Other` folders; albums and playlists
+  in their own folder (on by default).
+- **Video:** default quality (Best, 2160p, 1440p, 1080p (the default), 720p, 480p, 360p, or Audio only);
+  format (MP4, MKV or WebM); **Prefer H.264 for compatibility** (on by default).
+- **Audio:** format (M4A, MP3 or Opus) and the MP3 bitrate (128, 192 or 320 kbps). Conversion uses the
+  bundled FFmpeg.
+- **Sharing:** when you share a link, **Download right away** (the default) or **Ask quality first**,
+  which shows a sheet of video qualities, Audio and Cancel.
+- **Network:** Wi-Fi only; up to 1–5 downloads at once (3 by default). Others wait their turn.
+- **Notifications:** progress notifications on or off. Finished and failed downloads are always notified.
+  With progress off, Android still needs one silent, minimised notice while a download runs.
+- **Appearance:** System, Light or Dark.
+- **YouTube:** an optional **YouTube account** sign-in, which helps with bot checks and age-restricted
+  videos. It opens Google's sign-in page in the app. The cookies stay in SwiftDrop's private storage on
+  the phone and are only passed to yt-dlp for YouTube links. **Sign out** deletes them. Also: the engine
+  channel (Stable or Nightly), **Auto-update engine** (on by default) and **Update now** with the
+  installed version. If GitHub rate-limits update checks, SwiftDrop says so and tries again later.
+- **Storage and history:** clear the download history (files are kept); clear temporary files.
+- **About:** version, website and open-source licences (yt-dlp, FFmpeg, youtubedl-android).
 
 **Build**
 
