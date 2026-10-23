@@ -103,8 +103,10 @@ Spotify's own audio is DRM-protected and is never touched.
 
 **Install**
 
-1. Copy `SwiftDrop-Android-1.2.0.apk` to the phone and open it. It installs over 1.0 and 1.1 and keeps
-   your download list and settings.
+1. Copy `SwiftDrop-Android-1.2.1-arm64.apk` to the phone and open it. It's the right file for almost
+   every phone. Only older 32-bit phones need `SwiftDrop-Android-1.2.1-armv7.apk`. It installs over
+   earlier versions and keeps your download list and settings. The APKs carry v1, v2 and v3
+   signatures, because some installers (OPPO's ColorOS, for one) reject v2-only APKs as "invalid".
 2. Android asks you to allow **Install unknown apps** for the app you opened it from (Files, Chrome…).
    Allow it, go back and tap **Install**.
 3. Open SwiftDrop once. Allow notifications so you can see progress and finished downloads.
@@ -147,8 +149,10 @@ at the SDK with `sdk.dir=…`, or set `ANDROID_HOME`.
 ```sh
 cd android
 JAVA_HOME=/path/to/jdk-17 ./gradlew testDebugUnitTest assembleRelease
-# → app/build/outputs/apk/release/app-release.apk
+# → app/build/outputs/apk/release/app-arm64-v8a-release.apk and app-armeabi-v7a-release.apk
 ```
+
+The build makes one APK per phone ABI, because the bundled Python and FFmpeg are most of the app's size.
 
 The stack is Kotlin, Jetpack Compose (Material 3), WorkManager and Room. It builds with AGP 9.1 on the
 Gradle 9.3.1 wrapper.

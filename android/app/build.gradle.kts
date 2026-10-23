@@ -36,12 +36,18 @@ android {
         applicationId = "com.swiftdrop.android"
         minSdk = 26
         targetSdk = 36
-        versionCode = 3
-        versionName = "1.2.0"
+        versionCode = 4
+        versionName = "1.2.1"
+    }
 
-        ndk {
-            // yt-dlp's bundled Python and FFmpeg are native; ship only the two phone ABIs.
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+    splits {
+        abi {
+            // yt-dlp's bundled Python and FFmpeg are native and make up most of the app, so each
+            // phone ABI gets its own APK: almost every current phone needs only the arm64 one.
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a")
+            isUniversalApk = false
         }
     }
 
@@ -52,6 +58,11 @@ android {
                 storePassword = keystoreProperties.getProperty("storePassword")
                 keyAlias = keystoreProperties.getProperty("keyAlias")
                 keyPassword = keystoreProperties.getProperty("keyPassword")
+                // Some phone makers' installers (OPPO ColorOS, for one) reject APKs without the
+                // legacy v1 signature as "package appears to be invalid", so sign with every scheme.
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
             }
         }
     }
